@@ -124,8 +124,14 @@ def _explain(url: str, as_json: bool, render: bool) -> int:
     from sourcelib.explain import explain, format_digest
     from sourcelib.http import ScraperFetcher
 
-    with ScraperFetcher(origin=url) as fetcher:
-        response = fetcher.render(url) if render else fetcher.fetch("GET", url)
+    try:
+        with ScraperFetcher(origin=url) as fetcher:
+            response = fetcher.render(url) if render else fetcher.fetch("GET", url)
+    except Exception as error:
+        # This is the first command anyone runs, so a mistyped URL must not answer with a
+        # traceback. `try` already reports this way; this did not.
+        print(f"could not fetch {url}: {_reason(error)}", file=sys.stderr)
+        return 1
 
     document = Document.from_html(response.text, url=response.url, headers=response.headers)
     digest = explain(document)
@@ -135,6 +141,12 @@ def _explain(url: str, as_json: bool, render: bool) -> int:
         else format_digest(digest)
     )
     return 0
+
+
+def _reason(error: BaseException) -> str:
+    """A one-line account of a failed retrieval, without the traceback."""
+    text = str(error).strip()
+    return text or type(error).__name__
 
 
 def _record(path: Path, url: str, root: Optional[Path]) -> int:

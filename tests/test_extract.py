@@ -206,6 +206,48 @@ class TestDefaultPipes:
         document = Document.from_json({"body": "<p>One</p><p>Two</p>"})
         assert read(document, kind="body", json="body") == "<p>One</p><p>Two</p>"
 
+    def test_every_node_consuming_step_keeps_the_node(self):
+        # Found by the first live run: this was a hand-written list holding 5 of the 11 steps
+        # that take a node, so a pipe beginning with one of the other 6 had its element
+        # flattened to a string first and the step raised. Derived from the registry now.
+        from sourcelib.spec.extract import _NODE_STEPS
+        from sourcelib.transform import REGISTRY
+
+        assert _NODE_STEPS == {n for n, s in REGISTRY.items() if s.takes == "node"}
+        assert len(_NODE_STEPS) == 11
+
+    @pytest.mark.parametrize(
+        "first",
+        [
+            {"drop_leading": {"matches": r"(?i)^\s*first", "within": 5}},
+            {"keep_attrs": "class"},
+            {"unwrap": ["span"]},
+            {"strip_tags": ["script"]},
+            {"strip_css": [".ads"]},
+            "unlazy_images",
+            "drop_empty_nodes",
+            "unwrap_all",
+            "text",
+            "inner_html",
+            "paragraphs",
+        ],
+    )
+    def test_a_pipe_starting_with_a_node_step_receives_a_node(self, page, first):
+        # Each of these raised "expected a node, got str" for six of the eleven.
+        assert read(page, css="div.summary", pipe=[first]) is not None
+
+    def test_the_live_novelfire_body_pipe_works(self, page):
+        value = read(
+            page,
+            kind="body",
+            css="div.summary",
+            pipe=[
+                {"drop_leading": {"matches": r"(?i)^\s*first", "within": 5}},
+                {"paragraphs": {"block_tags": ["p"]}},
+            ],
+        )
+        assert "First line." not in value and "Second" in value
+
     def test_an_undeclared_attr_lets_a_node_reach_a_node_pipe(self, page):
         # Section 3.4. With attr defaulting to text the element would be flattened first and
         # every paragraph boundary lost, which makes a chapter body inexpressible.

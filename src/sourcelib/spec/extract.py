@@ -15,7 +15,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup, Tag
 
 from sourcelib.spec.model import Extractor
-from sourcelib.transform import apply_pipe
+from sourcelib.transform import REGISTRY, apply_pipe
 
 __all__ = [
     "Document",
@@ -44,9 +44,15 @@ _GENERAL_DEFAULT: List[Any] = ["trim", "collapse_spaces"]
 #: Field kinds whose value is a URL and therefore resolved against the document (section 4.3).
 URL_FIELDS: Tuple[str, ...] = ("url", "cover")
 
-#: Steps that consume a node. A default built from these needs `parse_html` in front of a
-#: string, which is what lets a body arrive inside a JSON field with no boilerplate.
-_NODE_STEPS = frozenset({"unwrap", "paragraphs", "strip_tags", "strip_css", "unlazy_images"})
+#: Steps that consume a node, read from the registry rather than listed here. Every step
+#: already declares what it takes, so a second list can only drift from it: hand-written, this
+#: held five of the eleven, and a pipe beginning with one of the six it missed had its element
+#: flattened to a string before the step ran.
+#:
+#: A pipe starting with one of these keeps the selected element instead of `attr`'s default
+#: (§3.4), and a default built from them gets `parse_html` in front of a string, which is what
+#: lets a body arrive inside a JSON field with no boilerplate.
+_NODE_STEPS = frozenset(name for name, step in REGISTRY.items() if step.takes == "node")
 
 
 class ExtractError(Exception):

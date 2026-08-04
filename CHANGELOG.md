@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-08-04
+
+Both fixes come from the first run against a live site.
+
+### Fixed
+
+- **A chapter body was unreadable whenever its pipe began with one of six steps.** The rule that keeps a selected element intact for a pipe that consumes a node (RFC-0001 section 3.4) consulted a hand-written list of node-consuming steps holding five of the eleven. A pipe starting with any of `drop_leading`, `keep_attrs`, `drop_empty_nodes`, `unwrap_all`, `inner_html` or `text` therefore had its element flattened to a string first, and the step failed with `expected a node, got str`. Since `drop_leading` is how a duplicated chapter heading is removed, this hit ordinary bodies rather than unusual ones. The set is now read from the transform registry, which already declares what every step consumes, so a second list cannot fall behind it.
+
+- **`explain` answered a failed retrieval with a traceback.** A mistyped URL or a `404` printed a stack trace instead of a reason, in the one command a contributor runs first. It now reports the failure on stderr and exits non-zero, as `try` already did.
+
 ## [0.1.0] - 2026-08-04
 
 First release. Implements [RFC-0001](https://github.com/lncrawl/sources/blob/main/docs/0001-source-definition.md) at `spec: 1`.
@@ -36,4 +46,5 @@ First release. Implements [RFC-0001](https://github.com/lncrawl/sources/blob/mai
 
 - **Fetching is an extra.** `pip install lncrawl-sourcelib` validates, resolves and transforms with no HTTP stack; `[fetch]` adds one. The definitions repository's CI and anyone only writing YAML should not need a TLS impersonation library.
 
+[0.1.1]: https://github.com/lncrawl/sourcelib/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/lncrawl/sourcelib/releases/tag/v0.1.0
