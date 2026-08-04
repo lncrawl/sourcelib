@@ -45,13 +45,23 @@ jobs:
 
       # This package is the crawler's next core, not a feature of it. Keeping the
       # dependency out is what makes that swap a deletion rather than a rewrite, so it is
-      # asserted twice: statically over every import, and by importing with nothing else
-      # installed.
+      # asserted twice: statically over every import, and by importing for real with
+      # nothing but the runtime dependencies present.
       - name: Assert nothing imports the crawler
-        run: uv run --no-dev pytest tests/test_decoupling.py -q
+        run: uv run pytest tests/test_decoupling.py -q
 
+      # A throwaway environment rather than `--no-dev`, which declines to install but does
+      # not uninstall: in a venv that already has the dev group, it would pass regardless.
       - name: Import with only runtime dependencies present
-        run: uv run --no-dev python -c "import sourcelib; print(sourcelib.__version__)"
+        run: |
+          uv venv /tmp/runtime-only
+          uv pip install --python /tmp/runtime-only/bin/python .
+          /tmp/runtime-only/bin/python - <<'PY'
+          import sourcelib, sourcelib.fetch, sourcelib.transform, sourcelib.trial
+          print("imports with runtime dependencies only:", sourcelib.__version__)
+          import sys
+          assert "lncrawl" not in sys.modules, "the crawler was imported"
+          PY
 
   build:
     name: Test and build (Python ${{ matrix.python-version }})
