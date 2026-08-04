@@ -6,6 +6,8 @@ unknown ones, and carries the descriptions that drive autocompletion.
 
 import json
 
+import pytest
+
 from sourcelib.spec.schema import build, render
 
 
@@ -54,3 +56,18 @@ class TestStability:
         schema = build()
         assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
         assert schema["title"] == "Source definition"
+
+
+class TestGenerator:
+    """The specs repository regenerates with this, so it must be installable as written."""
+
+    def test_it_records_a_pip_requirement(self):
+        assert build()["x-generator"].startswith("lncrawl-sourcelib==")
+
+    def test_the_version_is_not_the_source_tree_placeholder(self):
+        # 0.0.0 means the package metadata was unreadable, which would pin nothing.
+        assert not build()["x-generator"].endswith("==0.0.0")
+
+    def test_it_is_an_unknown_keyword_a_validator_ignores(self):
+        jsonschema = pytest.importorskip("jsonschema")
+        jsonschema.Draft202012Validator.check_schema(build())

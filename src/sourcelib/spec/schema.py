@@ -2,6 +2,12 @@
 
 The schema is generated from the model rather than maintained beside it, so the two cannot
 disagree. RFC-0001 section 3.10 requires CI to regenerate it and fail on a difference.
+
+That check runs in the repository holding the *specs*, not here, so the generated file
+records which version of this package produced it. Without that, the definitions repository
+would have to regenerate with whatever version happened to be latest, and a source pull
+request could fail on a schema difference nobody in it caused. ``x-generator`` is an unknown
+keyword to a validator and is ignored by one.
 """
 
 from __future__ import annotations
@@ -10,9 +16,18 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
+from sourcelib import __version__
 from sourcelib.spec.model import SourceSpec
 
 SCHEMA_ID = "https://raw.githubusercontent.com/lncrawl/sources/main/schema/source.v1.json"
+
+#: The keyword carrying the pip requirement that reproduces this file.
+GENERATOR_KEY = "x-generator"
+
+
+def generator() -> str:
+    """A pip requirement that installs the version which generated this schema."""
+    return f"lncrawl-sourcelib=={__version__}"
 
 
 def build() -> Dict[str, Any]:
@@ -24,6 +39,7 @@ def build() -> Dict[str, Any]:
     schema["description"] = (
         "A declarative description of how to read one website, as defined by RFC-0001."
     )
+    schema[GENERATOR_KEY] = generator()
     return schema
 
 
