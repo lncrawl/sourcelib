@@ -1,0 +1,115 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lncrawl-sourcelib"
+version = "0.1.0"
+description = "Interpreter for declarative light-novel source definitions, as defined by RFC-0001."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "Sudipta Chandra", email = "dipu.sudipta@gmail.com" }]
+keywords = [
+    "lightnovel",
+    "scraper",
+    "declarative",
+    "source-definition",
+    "json-schema",
+    "yaml",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    "pydantic>=2.7",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+sourcelib = "sourcelib.cli:main"
+
+[project.urls]
+Repository = "https://github.com/lncrawl/sourcelib"
+Issues = "https://github.com/lncrawl/sourcelib/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sourcelib"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-cov>=6.3.0",
+    "pyright>=1.1",
+    "ruff>=0.15.16",
+    "poethepoet>=0.37.0",
+]
+
+[tool.poe.tasks]
+lint = [
+    { cmd = "ruff check" },
+    { cmd = "ruff format --check" },
+    { cmd = "pyright" },
+]
+lint-fix = [
+    { cmd = "ruff check --fix" },
+    { cmd = "ruff format" },
+]
+test = "pytest"
+cov = "pytest --cov --cov-branch --cov-report=term-missing --cov-report=xml"
+
+# The published schema editors read. Regenerating and diffing it is what keeps the
+# schema and the model from drifting; see RFC-0001 section 3.10.
+schema = "python -m sourcelib.spec.schema"
+
+build = [
+    { ref = "lint" },
+    { ref = "test" },
+    { cmd = "uv build" },
+]
+publish = [
+    { ref = "build" },
+    { cmd = "uv publish" },
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["sourcelib"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.pyright]
+pythonVersion = "3.9"
+typeCheckingMode = "standard"
+include = ["src", "tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
