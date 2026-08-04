@@ -1,5 +1,7 @@
 """Requests and pagination, per RFC-0001 sections 3.6 and 3.7."""
 
+import time
+
 import pytest
 
 from sourcelib.fetch import (
@@ -639,6 +641,12 @@ class TestPageSequence:
     """
 
     def walk(self, last: int, **extra):
+        """Which pages were asked for, sorted.
+
+        Sorted because these fetch concurrently, so the order calls arrive in is the thread pool's
+        and not the walk's. Asserting that order passed on 3.9 and failed on 3.13. The order the
+        *pages* come back in is the real guarantee and has a test of its own below.
+        """
         pages = {f"https://example.com/p{n}": rows(2) for n in range(0, 20000)}
         fetcher = RecordedFetcher(pages)
         first = Document.from_html(rows(2), url="https://example.com/p1")
@@ -648,7 +656,7 @@ class TestPageSequence:
             fetcher,
             context_for(ORIGIN),
         )
-        return [url.rsplit("/p", 1)[1] for _, url in fetcher.calls]
+        return sorted((url.rsplit("/p", 1)[1] for _, url in fetcher.calls), key=int)
 
     def test_the_default_is_the_one_based_site(self):
         assert self.walk(5) == ["2", "3", "4", "5"]
@@ -663,3 +671,37 @@ class TestPageSequence:
 
     def test_first_and_last_may_be_read_from_the_page(self):
         assert self.walk(4, first={"const": "0"}) == ["1", "2", "3", "4"]
+
+
+class TestNumberedPagesKeepTheirOrder:
+    """Concurrent pagination MUST preserve page order (RFC-0001 section 4.5).
+
+    Chapter numbering is what a consumer stores and compares, so ordering by completion would
+    renumber a library on every run. This was untested for numbered walks: a test that asserted the
+    *request* order stood in for it, and that order is the thread pool's to choose.
+    """
+
+    class Slow:
+        """Answers later pages first, so completion order is the reverse of submission order."""
+
+        def __init__(self, last: int) -> None:
+            self.last = last
+
+        def fetch(self, method, url, **kwargs):
+            page = int(url.rsplit("/p", 1)[1])
+            time.sleep(0.002 * (self.last - page))
+            return Fetched(url, rows(1))
+
+        def render(self, url, *, wait_for=None):  # pragma: no cover - not exercised
+            raise NotImplementedError
+
+    def test_pages_come_back_by_index_not_by_completion(self):
+        last = 12
+        first = Document.from_html(rows(1), url="https://example.com/p1")
+        pages, _ = walk_pages(
+            first,
+            paginate(last={"const": str(last)}, url="{origin}/p{page}"),
+            self.Slow(last),
+            context_for(ORIGIN),
+        )
+        assert [p.url for p in pages] == [f"https://example.com/p{n}" for n in range(1, last + 1)]

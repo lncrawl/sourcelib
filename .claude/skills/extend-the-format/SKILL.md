@@ -20,8 +20,13 @@ design it removed `requires`, a login stage, `of`/`join`, a separate `attrs` fie
 index.
 
 Until something clears that bar, the answer is a hook. Record the count when you decline, so the
-evidence accumulates instead of being re-derived. Two gaps are open on exactly this basis right now:
-row filtering by a sibling field, and offset pagination.
+evidence accumulates instead of being re-derived. Two gaps are open on exactly this basis: row
+filtering by a sibling field, and paging by item offset rather than page number.
+
+The second one shows how the counting pays off. It started as "offset pagination" across 26 hosts,
+which sounded like one gap; separating the shapes showed that 18 of those were simply numbered from
+zero, which `paginate.first` now covers, leaving 8 that genuinely page by item offset. A vague count
+would have argued for a vague feature.
 
 Three rules hold the line and none is negotiable for convenience:
 
