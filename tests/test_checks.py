@@ -183,3 +183,38 @@ class TestProblem:
     )
     def test_equality(self, a, b, equal):
         assert (a == b) is equal
+
+
+class TestPageOrder:
+    """Section 3.6: a `page` must name a request that has already run when it is evaluated."""
+
+    def test_reusing_the_novel_page_for_the_toc_is_fine(self):
+        assert problems() == []
+
+    def test_a_stage_cannot_reuse_its_own_document(self):
+        # The natural typo: `page: novel` inside the novel stage reads as "the novel page".
+        # It used to reach the fetcher and fail there, naming the cache rather than the spec.
+        found = problems(novel={"request": {"page": "novel"}, "title": {"css": "h1"}})
+        assert "novel.request.page" in found
+
+    def test_a_forward_reference_is_refused(self):
+        found = problems(novel={"request": {"page": "toc"}, "title": {"css": "h1"}})
+        assert "novel.request.page" in found
+
+    def test_an_alternative_inside_from_is_checked_too(self):
+        found = problems(
+            toc={"request": {"from": [{"page": "chapter"}]}, "items": {"css": "a"}},
+        )
+        assert "toc.request.page" in found
+
+    def test_a_chapter_may_reuse_the_toc_document(self):
+        assert problems(chapter={"request": {"page": "toc"}, "body": {"css": "#content"}}) == []
+
+    def test_a_named_request_from_an_earlier_stage_resolves(self):
+        assert (
+            problems(
+                novel={"request": {"name": "landing"}, "title": {"css": "h1"}},
+                toc={"request": {"page": "landing"}, "items": {"css": "a"}},
+            )
+            == []
+        )

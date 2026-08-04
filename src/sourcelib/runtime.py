@@ -18,7 +18,7 @@ from typing import Any, Callable, Collection, Dict, List, Mapping, Optional, Tup
 
 from sourcelib.fetch import Fetcher, run_request, walk_pages
 from sourcelib.hooks import Context, HookRegistry
-from sourcelib.interpolate import render
+from sourcelib.interpolate import render_url
 from sourcelib.models import Chapter, Novel, SearchResult, Volume
 from sourcelib.spec.extract import Document, extract
 from sourcelib.spec.items import Row, assign_volumes, group_by_size, read_rows, sort_rows
@@ -154,7 +154,14 @@ class Interpreter:
             spec_encoding=self.spec.encoding,
         )
 
-    def _run(self, stage: str, request: Any, default_url: Optional[str] = None, **ctx: Any):
+    def _run(
+        self,
+        stage: str,
+        request: Any,
+        default_url: Optional[str] = None,
+        yields: Optional[Callable[[Document], bool]] = None,
+        **ctx: Any,
+    ):
         function, hook_ctx = self._hook(f"{stage}.request")
         if function is not None:
             # A request hook replaces the whole fetch, which is how a site speaking a protocol
@@ -170,7 +177,7 @@ class Interpreter:
                 parser=self.spec.parser or "html.parser",
                 spec_headers=self.spec.headers,
                 spec_encoding=self.spec.encoding,
-                yields=None,
+                yields=yields,
             )
         self.documents[stage] = document
         self.vars.offer(stage, document)
@@ -184,13 +191,16 @@ class Interpreter:
         if stage is None or stage.request is None:
             return []
 
-        document = self._run("search", stage.request, query=query)
+        def has_items(document: Document) -> bool:
+            return bool(self._rows(stage, document, ("url",))[0])
+
+        document = self._run("search", stage.request, yields=has_items, query=query)
         pages, truncated = walk_pages(
             document,
             stage.request.paginate,
             self.fetcher,
             self.context(query=query),
-            has_items=lambda d: bool(self._rows(stage, d, ("url",))[0]),
+            has_items=has_items,
             parser=self.spec.parser or "html.parser",
         )
         if truncated:
@@ -306,13 +316,20 @@ class Interpreter:
 
         chapter_list = stage.items
         request = stage.request or _get(url)
-        document = self._run("toc", request, default_url=url, novel_url=url)
+
+        def has_items(document: Document) -> bool:
+            return bool(self._rows(chapter_list, document, ("url",))[0])
+
+        # `from` means "until one yields items", so an alternative that answers 200 with an
+        # empty body has to lose to the next one. Without the predicate the first alternative
+        # that merely fetched won, which made the fallback list decorative.
+        document = self._run("toc", request, default_url=url, yields=has_items, novel_url=url)
         pages, truncated = walk_pages(
             document,
             request.paginate,
             self.fetcher,
             self.context(novel_url=url),
-            has_items=lambda d: bool(self._rows(chapter_list, d, ("url",))[0]),
+            has_items=has_items,
             parser=self.spec.parser or "html.parser",
         )
         if truncated:
@@ -475,7 +492,13 @@ class Interpreter:
         if stage.url is None:
             return chapter.url
         if isinstance(stage.url, str):
-            return render(stage.url, self.context(novel_url=novel.url, chapter=chapter.context()))
+            return render_url(
+                stage.url,
+                self.context(
+                    novel_url=novel.url,
+                    chapter=chapter.context(),
+                ),
+            )
         document = self.documents.get("toc")
         if document is None:
             return chapter.url

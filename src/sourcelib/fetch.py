@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import urljoin
 
-from sourcelib.interpolate import render
+from sourcelib.interpolate import render, render_url
 from sourcelib.spec.extract import Document, extract
 from sourcelib.spec.model import Paginate, Request
 
@@ -215,7 +215,7 @@ def _perform(
     cache: Mapping[str, Document],
 ) -> Document:
     target = request.get or request.post
-    url = render(target, context) if target else default_url
+    url = render_url(target, context) if target else default_url
     if not url:
         raise FetchError("a request with no address needs a stage default")
 
@@ -311,8 +311,8 @@ def _first_that_yields(
                 spec_headers,
                 spec_encoding,
             )
-        except FetchError as error:
-            problems.append(str(error))
+        except Exception as error:
+            problems.append(repr(error))
             continue
         last = document
         if yields is None or yields(document):
@@ -351,7 +351,14 @@ def walk_pages(
 
 
 def _page_url(paginate: Paginate, context: Mapping[str, Any], page: int, request_url: str) -> str:
-    return render(paginate.url or "", {**dict(context), "page": page, "request_url": request_url})
+    return render_url(
+        paginate.url or "",
+        {
+            **dict(context),
+            "page": page,
+            "request_url": request_url,
+        },
+    )
 
 
 def _page_count(first: Document, paginate: Paginate) -> int:

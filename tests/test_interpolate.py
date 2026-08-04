@@ -11,6 +11,7 @@ from sourcelib.interpolate import (
     context_for,
     placeholders_in,
     render,
+    render_url,
     validate_template,
 )
 
@@ -210,3 +211,29 @@ class TestClosedSets:
             "username",
             "password",
         }
+
+
+class TestRenderUrl:
+    """A template cannot know whether the placeholder before its `/` already ends in one."""
+
+    def test_a_doubled_slash_in_the_path_collapses(self):
+        context = context_for("https://e.test", novel_url="https://e.test/manga/a-title/")
+        assert (
+            render_url("{novel_url}/ajax/chapters/", context)
+            == "https://e.test/manga/a-title/ajax/chapters/"
+        )
+
+    def test_the_scheme_keeps_its_own_slashes(self):
+        assert render_url("{origin}/x", context_for("https://e.test")) == "https://e.test/x"
+
+    def test_a_query_string_keeps_a_doubled_slash(self):
+        # A `//` after the `?` can be data: a redirect target, or a path a site passes along.
+        rendered = render_url("{origin}/go?to=//other.test/x", context_for("https://e.test"))
+        assert rendered == "https://e.test/go?to=//other.test/x"
+
+    def test_a_single_slash_is_untouched(self):
+        context = context_for("https://e.test", novel_url="https://e.test/manga/a-title")
+        assert (
+            render_url("{novel_url}/ajax/chapters/", context)
+            == "https://e.test/manga/a-title/ajax/chapters/"
+        )

@@ -3,6 +3,7 @@
 import pytest
 
 from sourcelib.fetch import (
+    Fetched,
     FetchError,
     RecordedFetcher,
     encode_payload,
@@ -516,3 +517,45 @@ class TestNoPagination:
         first = Document.from_html(rows(3), url="https://e/x")
         pages, truncated = walk_pages(first, None, RecordedFetcher({}), context_for(ORIGIN))
         assert pages == [first] and truncated is False
+
+
+class TestAnAlternativeFailingInAnotherWay:
+    """`from` exists for an endpoint that may not be present, and a 404 is how a site says so.
+
+    The HTTP layer raises its own exception rather than a FetchError, so catching only the
+    latter made the first missing alternative abort the stage. Found by a live Madara host.
+    """
+
+    class Rejecting:
+        def __init__(self, pages):
+            self.pages = dict(pages)
+            self.calls = []
+
+        def fetch(self, method, url, **kwargs):
+            self.calls.append((method, url))
+            if url not in self.pages:
+                raise RuntimeError(f"404 Client Error:  for url: {url}")
+            return Fetched(url, self.pages[url])
+
+        def render(self, url, *, wait_for=None):  # pragma: no cover - not exercised
+            raise NotImplementedError
+
+    def test_the_next_alternative_is_still_tried(self):
+        fetcher = self.Rejecting({"https://example.com/admin": rows(3)})
+        document = run_request(
+            request(**{"from": [{"get": "{origin}/ajax"}, {"get": "{origin}/admin"}]}),
+            fetcher,
+            context_for(ORIGIN),
+            yields=has_rows,
+        )
+        assert has_rows(document)
+        assert len(fetcher.calls) == 2
+
+    def test_the_reason_names_the_exception(self):
+        with pytest.raises(FetchError, match="RuntimeError"):
+            run_request(
+                request(**{"from": [{"get": "{origin}/ajax"}]}),
+                self.Rejecting({}),
+                context_for(ORIGIN),
+                yields=has_rows,
+            )

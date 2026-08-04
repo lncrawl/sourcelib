@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-08-04
+
+All four come from running the shared WordPress base against a live Madara host, and every one made `from` less useful than the RFC describes.
+
+### Fixed
+
+- **`from` gave up on the first alternative that failed in an unexpected way.** Only a `FetchError` was caught, but the HTTP layer raises its own exception for a `404`, and an endpoint absent from this installation is the exact case the fallback list exists for. Any failure now falls through, and the reason names each alternative's exception when all of them fail.
+
+- **`from` never checked whether an alternative produced items.** The predicate was passed for pagination but not for the fallback list, so the first alternative that merely fetched won. An ajax endpoint answering `200` with an empty body therefore reported zero chapters instead of falling through to the page holding them, which made a fallback list decorative wherever a dead endpoint stays reachable.
+
+- **A URL template's doubled slash reached the site.** `{novel_url}/ajax/chapters/` is the natural way to write that request, and a novel URL ending in `/` made it `.../a-title//ajax/chapters/`. Enough sites answer the doubled form with a `404` that leaving it to the author means every such template carries the same latent bug. The path is now collapsed after rendering; a query string keeps its slashes, since a `//` there can be data.
+
+- **A `page` naming a request that had not run was a mid-crawl failure.** RFC-0001 section 3.6 requires rejecting it, but the only check was the fetcher's own cache lookup, which reported a missing page rather than a spec defect. `novel: request: {page: novel}` reads as "the novel page" and is the natural way to write this mistake. Self-references, forward references and `from` alternatives are all checked when the spec loads.
+
 ## [0.1.1] - 2026-08-04
 
 Both fixes come from the first run against a live site.
@@ -46,5 +60,6 @@ First release. Implements [RFC-0001](https://github.com/lncrawl/sources/blob/mai
 
 - **Fetching is an extra.** `pip install lncrawl-sourcelib` validates, resolves and transforms with no HTTP stack; `[fetch]` adds one. The definitions repository's CI and anyone only writing YAML should not need a TLS impersonation library.
 
+[0.1.2]: https://github.com/lncrawl/sourcelib/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/lncrawl/sourcelib/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/lncrawl/sourcelib/releases/tag/v0.1.0

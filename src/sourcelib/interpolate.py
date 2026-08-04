@@ -23,6 +23,7 @@ __all__ = [
     "apply_filter",
     "placeholders_in",
     "render",
+    "render_url",
     "validate_template",
 ]
 
@@ -174,6 +175,26 @@ def render(template: str, context: Mapping[str, Any], strict: bool = True) -> st
         return text
 
     return _TOKEN.sub(substitute, template)
+
+
+#: A run of slashes in the path, after the scheme's own `//`.
+_DOUBLED = re.compile(r"(?<!:)//+")
+
+
+def render_url(template: str, context: Mapping[str, Any], strict: bool = True) -> str:
+    """Render a URL template, then collapse a doubled slash in its path.
+
+    A template cannot know whether the placeholder before its literal `/` already ends in one:
+    `{novel_url}/ajax/chapters/` is the natural way to write that request and produces
+    `.../a-title//ajax/chapters/` for a novel URL with a trailing slash. Sites disagree about
+    whether the two are the same address, and enough answer the doubled form with a 404 that
+    leaving it to the spec author means every such template carries the same latent bug.
+
+    Only the path is touched. A query string keeps its slashes, since a `//` there can be data.
+    """
+    rendered = render(template, context, strict=strict)
+    head, separator, tail = rendered.partition("?")
+    return _DOUBLED.sub("/", head) + separator + tail
 
 
 def context_for(

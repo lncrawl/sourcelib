@@ -357,3 +357,29 @@ class TestSearch:
             ("One", "https://e.test/n/1", "12 ch"),
             ("Two", "https://e.test/n/2", "30 ch"),
         ]
+
+
+class TestTocFromAlternatives:
+    """`from` means "until one yields items", so the toc has to supply the predicate.
+
+    Without it the first alternative that merely fetched won, which made the fallback list
+    decorative: a Madara host whose ajax endpoint answers 200 with an empty body would have
+    reported zero chapters instead of falling through to the page that has them.
+    """
+
+    def test_an_alternative_that_fetches_but_holds_no_rows_loses(self, site):
+        site.pages["https://e.test/ajax"] = "<html><body><ul></ul></body></html>"
+        interpreter = Interpreter(
+            spec(
+                toc={
+                    "request": {"from": [{"get": "{origin}/ajax"}, {"page": "novel"}]},
+                    "items": {
+                        "css": "li.ch",
+                        "fields": {"title": {"css": "a"}, "url": {"css": "a", "attr": "href"}},
+                    },
+                }
+            ),
+            site,
+        )
+        novel = interpreter.read_novel("https://e.test/novel/x")
+        assert [c.title for c in novel.chapters] == ["Ch 1", "Ch 2", "Ch 3"]

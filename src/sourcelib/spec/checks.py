@@ -72,6 +72,53 @@ def check_resolved(spec: SourceSpec) -> List[Problem]:
         problems.extend(_check_capable(spec))
     problems.extend(_check_addresses(spec))
     problems.extend(_check_claims(spec))
+    problems.extend(_check_page_order(spec))
+    return problems
+
+
+#: The order stages run in (section 3.6), which is what makes a `page` reference resolvable.
+_STAGE_ORDER = ("search", "novel", "toc", "chapter")
+
+
+def _requests_of(stage: object):
+    """Every request a stage carries: its own, and each `from` alternative."""
+    request = getattr(stage, "request", None)
+    if request is None:
+        return
+    yield request
+    for alternative in getattr(request, "from_", None) or ():
+        yield alternative
+
+
+def _check_page_order(spec: SourceSpec) -> List[Problem]:
+    """Section 3.6: a `page` MUST name a request that has already run.
+
+    Enforced here rather than left to the fetcher. A stage reusing its own document is the
+    natural typo (`novel: request: {page: novel}` reads as "the novel page") and it used to
+    surface as a mid-crawl error naming the cache, which says nothing about the spec.
+    """
+    problems: List[Problem] = []
+    names: set = set()
+
+    for position, stage_name in enumerate(_STAGE_ORDER):
+        stage = getattr(spec, stage_name, None)
+        if stage is None:
+            continue
+        earlier = set(_STAGE_ORDER[:position]) | names
+        for request in _requests_of(stage):
+            page = getattr(request, "page", None)
+            if page is not None and page not in earlier:
+                reason = (
+                    "a stage cannot reuse its own document"
+                    if page == stage_name
+                    else f"{page} has not run by then; stages run {', '.join(_STAGE_ORDER)}"
+                )
+                problems.append(Problem(f"{stage_name}.request.page", reason))
+        # A name becomes referenceable only once its own stage has run.
+        names.update(
+            request.name for request in _requests_of(stage) if getattr(request, "name", None)
+        )
+
     return problems
 
 
