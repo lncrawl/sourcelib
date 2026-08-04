@@ -9,16 +9,34 @@ the `lncrawl/sources` repository is the normative definition of the format. This
 written against it, and where the two disagree the RFC wins.
 
 ```bash
-pip install lncrawl-sourcelib
+pip install lncrawl-sourcelib          # validate, resolve and transform
+pip install lncrawl-sourcelib[fetch]   # ...and reach a site
 ```
+
+Fetching is an extra. Validating a spec needs no HTTP stack, and the definitions repository's
+CI and anyone only writing YAML should not have to install a TLS impersonation library.
 
 ## What it does
 
+Offline, on a checkout of the definitions repository:
+
 ```bash
 sourcelib check                          # resolve and validate every document
+sourcelib check --fixtures               # replay recorded pages
 sourcelib resolve specs/example.com.yaml # what a spec actually says once merged
 sourcelib schema -o schema.json          # the JSON Schema editors read
 ```
+
+Against a live site, which is what the `fetch` extra is for:
+
+```bash
+sourcelib explain <url>                              # a structural digest, for writing a spec
+sourcelib try specs/example.com.yaml <novel-url>     # run one spec, field by field
+sourcelib record specs/example.com.yaml <novel-url>  # save the pages as a fixture
+```
+
+`try` reports each field and exits non-zero on a failure, so an agent loop needs no output
+parsing. `--json` emits the same thing structurally.
 
 ```python
 from sourcelib.spec.checks import check_resolved
@@ -32,6 +50,41 @@ for problem in check_resolved(spec):
 `resolve` matters more than it looks. A spec can inherit through a chain of bases, so
 "what am I actually running" has to be answerable in one command or a deep chain becomes
 undebuggable.
+
+## Development
+
+```bash
+uv sync
+uv run poe test
+uv run poe lint          # ruff, then pyright
+uv run poe lint-fix
+```
+
+`[tool.poe.tasks]` in `pyproject.toml` is the full list.
+
+The CLI runs from the checkout the same way, with the extra when a command reaches a site:
+
+```bash
+uv run sourcelib check <path-to-sources-checkout>/specs --strict
+uv run --extra fetch sourcelib try <path>/specs/example.com.yaml <novel-url>
+```
+
+To work on a spec and the interpreter together, run the CLI from the definitions checkout
+against this one, so an edit here takes effect without reinstalling:
+
+```bash
+uv run --with-editable <path-to-this-checkout> --with lncrawl-scraper \
+  sourcelib try specs/example.com.yaml <novel-url>
+```
+
+The crawler resolves this package as an ordinary dependency. To point it at a checkout instead,
+install it into the crawler's environment and then use `uv run --no-sync` there, because a
+plain `uv run` re-syncs from the lock file and drops the override:
+
+```bash
+uv pip install -e <path-to-this-checkout>
+uv run --no-sync python -m lncrawl ...
+```
 
 ## Why it is its own package
 
