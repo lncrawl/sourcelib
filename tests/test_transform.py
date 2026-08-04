@@ -424,3 +424,30 @@ class TestDropLeadingWillNotEatTheBody:
         text = node.get_text()
         assert "Chapter 12" not in text
         assert "Real prose." in text
+
+
+class TestMinAndMax:
+    """`max` bounds a walk at the last page; `min` says which page the site calls its first."""
+
+    PAGER = ["page=8", "next", "page=0", "page=13", "last"]
+
+    def test_max_is_the_largest(self):
+        assert apply_step(self.PAGER, "max") == "13"
+
+    def test_min_is_the_smallest(self):
+        assert apply_step(self.PAGER, "min") == "0"
+
+    @pytest.mark.parametrize("step", ["min", "max"])
+    def test_entries_without_a_number_are_ignored(self, step):
+        # A pager's final links are "next" and "last" labels rather than numbers.
+        assert apply_step(["next", "prev"], step) == ""
+
+    @pytest.mark.parametrize("step", ["min", "max"])
+    def test_the_number_keeps_its_spelling(self, step):
+        # It goes straight back into a URL, and a site with `page=007` has no `page=7`.
+        assert apply_step(["page=007"], step) == "007"
+
+    @pytest.mark.parametrize("step", ["min", "max"])
+    def test_they_compare_numerically_not_as_text(self, step):
+        picked = apply_step(["9", "10"], step)
+        assert picked == ("10" if step == "max" else "9")

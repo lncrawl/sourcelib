@@ -22,6 +22,7 @@ from sourcelib.spec.model import Paginate, Request
 
 __all__ = [
     "DEFAULT_WORKERS",
+    "SPECULATIVE_WORKERS",
     "FetchError",
     "Fetched",
     "Fetcher",
@@ -32,9 +33,16 @@ __all__ = [
     "walk_pages",
 ]
 
-#: How many pages may be in flight when `concurrent` is set. The host's rate limit still
-#: applies underneath; this only decides how many may be waiting on it.
-DEFAULT_WORKERS = 4
+#: How many pages may be in flight when `concurrent` is set. The host's rate limit still applies
+#: underneath, and it should be the thing that limits a walk rather than this number: a site
+#: answering in five seconds under a three-per-second budget needs roughly fifteen requests waiting
+#: to keep that budget saturated, so a small pool silently paces slower than the spec asked for.
+DEFAULT_WORKERS = 16
+
+#: How many pages a `while` walk may request at once. Smaller than the pool on purpose: that walk is
+#: speculative, so a window is also the number of requests it can waste past the end of the list.
+#: `count` knows where to stop and has no such cost.
+SPECULATIVE_WORKERS = 4
 
 
 class FetchError(Exception):
@@ -342,21 +350,15 @@ def walk_pages(
     if paginate is None:
         return [first], False
 
-    # A caller may cap the walk more tightly than the spec does, which is how a trial stays quick on
-    # a chapter list hundreds of pages long. Applied as a tightened copy rather than threaded into
-    # each of the three walkers, all of which already respect `limit`, and never loosening what the
-    # spec asked for.
-    if limit is not None and (paginate.limit is None or limit < paginate.limit):
-        paginate = paginate.model_copy(update={"limit": limit})
-
     if paginate.next is not None:
-        return _follow_links(first, paginate, fetcher, context, parser, headers, encoding)
-    if paginate.count is not None:
-        total = _page_count(first, paginate)
+        return _follow_links(first, paginate, fetcher, context, parser, headers, encoding, limit)
+    if paginate.last is not None:
         return _fetch_numbered(
-            first, paginate, fetcher, context, total, parser, headers, encoding, workers
+            first, paginate, fetcher, context, parser, headers, encoding, workers, limit
         )
-    return _until_empty(first, paginate, fetcher, context, has_items, parser, headers, encoding)
+    return _until_empty(
+        first, paginate, fetcher, context, has_items, parser, headers, encoding, workers, limit
+    )
 
 
 def _page_url(paginate: Paginate, context: Mapping[str, Any], page: int, request_url: str) -> str:
@@ -370,15 +372,25 @@ def _page_url(paginate: Paginate, context: Mapping[str, Any], page: int, request
     )
 
 
-def _page_count(first: Document, paginate: Paginate) -> int:
-    raw = extract(paginate.count, first) if paginate.count else None
+def _number(value: Any, first: Document, fallback: int) -> int:
+    """A page number a spec gave literally or as something to read off the first page.
+
+    The largest match wins where an extractor produced several, because a pager lists every page it
+    can reach and the last of them is the one that bounds the walk.
+    """
+    if value is None:
+        return fallback
+    if isinstance(value, int):
+        return value
+
+    raw = extract(value, first)
     numbers = []
-    for value in raw if isinstance(raw, list) else [raw]:
+    for item in raw if isinstance(raw, list) else [raw]:
         try:
-            numbers.append(int(str(value).strip()))
+            numbers.append(int(str(item).strip()))
         except (TypeError, ValueError):
             continue
-    return max(numbers) if numbers else 1
+    return max(numbers) if numbers else fallback
 
 
 def _fetch_one(
@@ -400,23 +412,32 @@ def _fetch_numbered(
     paginate: Paginate,
     fetcher: Fetcher,
     context: Mapping[str, Any],
-    total: int,
     parser: str,
     headers: Optional[Mapping[str, str]],
     encoding: Optional[str],
     workers: int,
+    cap: Optional[int],
 ) -> Tuple[List[Document], bool]:
-    limit = paginate.limit
-    last = min(total, limit) if limit else total
-    truncated = bool(limit and total > limit)
-    wanted = list(range(2, last + 1))
+    # `count` yields the number of the *last* page, and `start` and `step` say how to reach it. The
+    # defaults, 2 and 1, are the one-based site: the stage's own request already produced page 1. A
+    # site numbering from zero sets `start: 1`, and one addressing pages by the index of their first
+    # item sets `step` to the page size. Without these the sequence was fixed at 2, 3, 4, so a
+    # zero-based site silently lost a page while reporting success.
+    # The stage's own request produced page `first`, so the walk covers the ones after it.
+    begin = _number(paginate.first, first, 1) + 1
+    end = _number(paginate.last, first, begin - 1)
+    wanted = list(range(begin, end + 1))
+
+    truncated = bool(cap and len(wanted) + 1 > cap)
+    if cap:
+        wanted = wanted[: max(0, cap - 1)]
     if not wanted:
         return [first], truncated
 
     def one(page: int) -> Document:
         return _fetch_one(paginate, fetcher, context, first.url, page, parser, headers, encoding)
 
-    if paginate.concurrent:
+    if paginate.runs_concurrently:
         # Assembled by page index, never by completion. Ordering by completion would number
         # chapters differently on every run, and the numbering is what gets stored.
         with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
@@ -436,25 +457,76 @@ def _until_empty(
     parser: str,
     headers: Optional[Mapping[str, str]],
     encoding: Optional[str],
+    workers: int = DEFAULT_WORKERS,
+    cap: Optional[int] = None,
 ) -> Tuple[List[Document], bool]:
     if has_items is None:
         raise FetchError("while: has_items needs a way to tell whether a page yielded rows")
 
     pages = [first]
-    page = 2
+    page = _number(paginate.first, first, 1) + 1
+    stride = min(max(1, workers), SPECULATIVE_WORKERS) if paginate.runs_concurrently else 1
+
     while True:
-        if paginate.limit and len(pages) >= paginate.limit:
+        if cap and len(pages) >= cap:
             return pages, True
+
+        wanted = list(range(page, page + stride))
+        if cap:
+            wanted = wanted[: cap - len(pages)]
+
+        # A window at a time rather than one page at a time. Nothing says how many pages there are,
+        # so the walk is speculative: it asks for the next few together and keeps them only up to
+        # the first that came back empty, discarding the rest. That costs at most one window of
+        # requests past the end of the list, and turns a novel with a hundred pages of chapter list
+        # from a hundred round trips into a few.
+        #
+        # Not a licence to flood a host: the pace a spec asks for is applied per origin underneath,
+        # so a window shares one budget rather than each request getting its own.
+        batch = _fetch_window(
+            wanted, paginate, fetcher, context, first.url, parser, headers, encoding, stride
+        )
+
+        for document in batch:
+            if document is None or not has_items(document):
+                return pages, False
+            pages.append(document)
+
+        if len(batch) < len(wanted):
+            return pages, bool(cap and len(pages) >= cap)
+        page += len(wanted)
+
+
+def _fetch_window(
+    wanted: Sequence[int],
+    paginate: Paginate,
+    fetcher: Fetcher,
+    context: Mapping[str, Any],
+    first_url: str,
+    parser: str,
+    headers: Optional[Mapping[str, str]],
+    encoding: Optional[str],
+    workers: int,
+) -> List[Optional[Document]]:
+    """The pages in *wanted*, in order, stopping the list at the first that could not be fetched.
+
+    A failure is `None` rather than an exception, because with `while` the page after the last one
+    is *expected* to fail or come back empty: that is how the walk learns where the end is.
+    """
+
+    def one(page: int) -> Optional[Document]:
         try:
-            document = _fetch_one(
-                paginate, fetcher, context, first.url, page, parser, headers, encoding
+            return _fetch_one(
+                paginate, fetcher, context, first_url, page, parser, headers, encoding
             )
-        except FetchError:
-            return pages, False
-        if not has_items(document):
-            return pages, False
-        pages.append(document)
-        page += 1
+        except Exception:
+            return None
+
+    if len(wanted) == 1 or workers <= 1:
+        return [one(wanted[0])] if wanted else []
+
+    with ThreadPoolExecutor(max_workers=min(workers, len(wanted))) as pool:
+        return list(pool.map(one, wanted))
 
 
 def _follow_links(
@@ -465,12 +537,13 @@ def _follow_links(
     parser: str,
     headers: Optional[Mapping[str, str]],
     encoding: Optional[str],
+    cap: Optional[int] = None,
 ) -> Tuple[List[Document], bool]:
     pages = [first]
     seen = {first.url}
     current = first
     while True:
-        if paginate.limit and len(pages) >= paginate.limit:
+        if cap and len(pages) >= cap:
             return pages, True
         link = extract(paginate.next, current, kind="url") if paginate.next else None
         target = link[0] if isinstance(link, list) and link else link

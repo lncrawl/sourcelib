@@ -152,16 +152,27 @@ class Extractor(Node):
 
 
 class Paginate(Node):
-    """How a stage walks more than one page."""
+    """How a stage walks more than one page.
+
+    `first` and `last` are the numbers the *site* puts on its own pages, not a count of them. The
+    stage's own request already produced `first`, so the pages fetched through `url` are the ones
+    after it, up to and including `last`.
+    """
 
     while_: Optional[Literal["has_items"]] = Field(
         default=None,
         alias="while",
-        description="Stop at the first page yielding nothing. Use when the page count is unknown.",
+        description="Stop at the first page yielding nothing. Use when the last page is unknown.",
     )
-    count: Optional[Extractor] = Field(
+    first: Union[int, Extractor] = Field(
+        default=1,
+        description="The number this site gives its first page, which the stage's own request "
+        "already fetched. Defaults to 1. Set 0 for a site numbering from zero.",
+    )
+    last: Optional[Union[int, Extractor]] = Field(
         default=None,
-        description="Reads the page count from the first page.",
+        description="The number of the last page, written literally or read from the first page. "
+        "Where several numbers match, the largest wins.",
     )
     next: Optional[Extractor] = Field(
         default=None,
@@ -169,18 +180,14 @@ class Paginate(Node):
     )
     url: Optional[UrlTemplate] = Field(
         default=None,
-        description="Produces the second page onward; the first comes from the stage's "
-        "own request. Required with 'while' and 'count', invalid with 'next'.",
+        description="Produces the pages after the first. Required with 'while' and 'last', "
+        "invalid with 'next', which takes its address from the link.",
     )
-    concurrent: bool = Field(
-        default=False,
-        description="Fetch pages in parallel. Valid only with 'count', since the other "
-        "conditions cannot know what to request next until the current page is read.",
-    )
-    limit: Optional[int] = Field(
+    concurrent: Optional[bool] = Field(
         default=None,
-        gt=0,
-        description="Caps pages fetched. A truncated result is reported.",
+        description="Fetch pages in parallel. Left unset it is on wherever the termination "
+        "condition allows it, which is 'last' and 'while'. Never with 'next', whose pages are "
+        "only known one at a time. Set false to force one request at a time.",
     )
 
     @model_validator(mode="after")
@@ -189,18 +196,35 @@ class Paginate(Node):
             name
             for name, value in (
                 ("while", self.while_),
-                ("count", self.count),
+                ("last", self.last),
                 ("next", self.next),
             )
             if value is not None
         ]
         if len(chosen) > 1:
-            raise ValueError(f"only one of while, count, next may be set, got {chosen}")
+            raise ValueError(f"only one of while, last, next may be set, got {chosen}")
         if self.next is not None and self.url is not None:
             raise ValueError("url is invalid with next, which takes its URL from the link")
-        if self.concurrent and self.count is None:
-            raise ValueError("concurrent is valid only with count")
+        if self.concurrent and self.next is not None:
+            # Only an *explicit* true is an error, and it is worth reporting because the author has
+            # misunderstood the mechanism: a next link is known only once the page holding it has
+            # been read. Left unset it simply does not apply, which is why the default is not a
+            # plain false.
+            raise ValueError("concurrent is invalid with next, whose pages are only known in turn")
         return self
+
+    @property
+    def runs_concurrently(self) -> bool:
+        """Whether pages may be fetched in parallel, with the default resolved.
+
+        Parallel by default because reading the chapter list is what a crawl spends its time on, and
+        a list addressed by page number has no reason to be walked one round trip at a time. The
+        host's pace is unaffected: it applies per origin, so this decides how many requests may wait
+        on that budget rather than how large it is.
+        """
+        if self.next is not None:
+            return False
+        return True if self.concurrent is None else self.concurrent
 
 
 class Request(Node):

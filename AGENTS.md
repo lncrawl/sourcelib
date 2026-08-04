@@ -83,6 +83,16 @@ Each of these has already been got wrong once, and none of them failed loudly.
   `hook_points()` so a point added later is covered without anyone remembering.
 - **A filter yields nothing; a cleanup yields its input unchanged.** Get that backwards and a step
   deletes rows while the crawl still reports success. `FILTERS` in `transform.py` is the list.
+
+  The corollary bites harder: **a cleanup with nothing *safe* to do must also change nothing.**
+  `drop_leading` removed the first block matching a heading pattern, and on a theme wrapping the whole
+  chapter in one element opening with its title that block was the body. A 5435-character chapter came
+  out as a 172-character notice with every field reporting `ok`. Any step that removes something needs
+  to ask whether what it found is the thing it was looking for.
+- **Parallelism is a default, and the rate limit is the constraint.** Pages fetch concurrently
+  wherever the termination condition allows, so a worker pool smaller than the declared pace paces
+  *slower than the spec asked for*. `while` walks speculatively and must discard anything past the
+  first empty page, however tempting the rows on it look, or the chapter list gains a gap.
 - **Evaluation order is normative, not incidental.** `all` resolves before `pipe` so a pipe maps
   element-wise over a list. Swapping them changes what an existing spec means.
 - **A parser wraps fragments and the depth is its choice.** `lxml` adds `<html><body>` and

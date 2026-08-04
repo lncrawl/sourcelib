@@ -473,15 +473,29 @@ def _join(values: Any, separator: Any) -> str:
     return str(separator).join(_text_of(v) for v in _as_list(values))
 
 
-def _max(values: Any) -> str:
-    numbers = []
+def _numbers_in(values: Any) -> List[str]:
+    """Every entry that carries a number, as it was written.
+
+    The original spelling is kept rather than the parsed value, because these read a page number off
+    a pager and it goes straight back into a URL. Reformatting `007` as `7` would address a page the
+    site does not have.
+    """
+    found = []
     for value in _as_list(values):
         match = re.search(r"-?\d+(?:\.\d+)?", _text_of(value))
         if match:
-            numbers.append(match.group(0))
-    if not numbers:
-        return ""
-    return max(numbers, key=lambda n: float(n))
+            found.append(match.group(0))
+    return found
+
+
+def _max(values: Any) -> str:
+    numbers = _numbers_in(values)
+    return max(numbers, key=float) if numbers else ""
+
+
+def _min(values: Any) -> str:
+    numbers = _numbers_in(values)
+    return min(numbers, key=float) if numbers else ""
 
 
 def _lines_to_html(values: Any, tag: Any = "p", attr: Any = None) -> str:
@@ -542,6 +556,7 @@ REGISTRY: Dict[str, StepSpec] = dict(
         _entry("unique", LIST, LIST, _unique),
         _entry("join", LIST, TEXT, _join),
         _entry("max", LIST, TEXT, _max),
+        _entry("min", LIST, TEXT, _min),
         _entry("lines_to_html", LIST, HTML, _lines_to_html),
     ]
 )

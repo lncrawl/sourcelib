@@ -439,22 +439,22 @@ is sitting on the page named further down.
 ```python
 Paginate:
     while:      Literal["has_items"] | None = None
-    count:      Extractor | None = None
+    first:      int | Extractor = 1
+    last:       int | Extractor | None = None
     next:       Extractor | None = None
     url:        UrlTemplate | None = None
-    concurrent: bool = False
-    limit:      int | None = None
+    concurrent: bool | None = None
 ```
 
-Exactly one of `while`, `count` and `next` MUST be present.
+Exactly one of `while`, `last` and `next` MUST be present.
 
 | Termination        | Use when                                                                 |
 | ------------------ | ------------------------------------------------------------------------ |
 | `while: has_items` | The number of pages is unknown. Stop at the first page yielding nothing. |
-| `count`            | The page count is readable from the first page.                          |
+| `last`             | The last page's number is readable from the first page, or known.        |
 | `next`             | The document links to the next page.                                     |
 
-`url` is REQUIRED with `while` and `count`, and MUST NOT be set with `next`, which takes its URL from
+`url` is REQUIRED with `while` and `last`, and MUST NOT be set with `next`, which takes its URL from
 the extracted link.
 
 **`url` produces the second page onward.** The first page comes from the stage's own `get`, `post` or
@@ -462,12 +462,41 @@ the extracted link.
 `/chapters/page-2`, and a scheme that generated `page-1` would either 404 or silently serve a
 duplicate.
 
-`concurrent` permits fetching pages in parallel. It is valid only with `count`, since the other two
-conditions cannot know what to request next until the current page is read. An implementation MUST
-continue to honour the host's rate limit when fetching concurrently.
+`concurrent` controls whether pages are fetched in parallel. **Left unset it is on wherever the
+termination condition allows**, which is `last` and `while`: a list addressed by page number has no
+reason to be walked one round trip at a time, and reading the chapter list is what a crawl spends most
+of its time on. Setting it `false` forces one request at a time.
 
-`limit` caps pages fetched. Implementations SHOULD report when a limit truncated a result, because a
-silent cap is indistinguishable from a site with fewer pages.
+It never applies with `next`, whose pages are known only one at a time because each address comes from
+the page before it. An unset `concurrent` there is simply inapplicable, while an explicit `true` MUST
+be rejected: the author has misunderstood the mechanism, and that is worth saying rather than ignoring.
+
+An implementation MUST continue to honour the host's rate limit when fetching concurrently.
+Parallelism decides how many requests may be waiting on that budget, never how large it is.
+
+With `while` the walk is necessarily speculative, since nothing says where the list ends. An
+implementation MAY request a window of pages together, and then MUST keep them only up to the first
+that yielded no items, discarding any beyond it even if those hold rows. A page kept from past the end
+would insert a gap into the chapter list. The cost is a bounded number of wasted requests, at most one
+window, which is why `last` remains preferable wherever a site reports where its list ends.
+
+**`first` and `last` are the numbers the site puts on its own pages, not a count of them.** The
+stage's own request already produced `first`, so the pages fetched through `url` are the ones after it,
+in steps of one, up to and including `last`. Either may be written as a literal or read from the first
+page, and where an extractor produces several numbers the largest wins, because a pager lists the pages
+it can reach and the last of those is what bounds the walk.
+
+`first` defaults to 1. A site numbering from zero sets `first: 0`, and getting that wrong fails **while
+reporting success**: the walk starts one page late and loses those chapters with every field still
+producing something.
+
+There is no separate cap on the number of pages. `last` already bounds the range, so a second bound
+would be a way of saying the same thing twice, and a caller that wants a tighter one for its own
+reasons applies it without the spec declaring anything. An implementation SHOULD report when it
+truncated a walk, because a silent cap is indistinguishable from a site with fewer pages.
+
+A site that addresses a page by the index of its first item rather than by a page number is **not**
+described by these. That is a different mechanism, not a variant of this one, and it needs a hook.
 
 `paginate` is the only iteration in this format. See §12.
 
@@ -884,7 +913,7 @@ not connect, at validation time rather than during a crawl.
 | text → text       | `trim`, `collapse_spaces`, `lower`, `title_case`, `normalize_unicode{form}`, `strip_prefix(s)`, `strip_suffix(s)`, `replace{pattern, with}`, `regex{pattern, group}`, `reject{pattern}` |
 | text → list       | `split(sep)`                                                                                                                                                                            |
 | list → list       | `drop_empty`, `unique`                                                                                                                                                                  |
-| list → text       | `join(sep)`, `max`                                                                                                                                                                      |
+| list → text       | `join(sep)`, `max`, `min`                                                                                                                                                                      |
 | list[text] → html | `lines_to_html{tag, attr}`                                                                                                                                                              |
 
 Steps absent from the table below do exactly what their name says. These do not, either because they
@@ -912,7 +941,8 @@ differently in the interpreter, the web preview and any other reader.
 | `split(sep)`                    | Splits on every occurrence of `sep`. Empty entries are kept, and `drop_empty` is what removes them.                                                                                                            |
 | `drop_empty`                    | Removes entries that are empty or whitespace only.                                                                                                                                                            |
 | `unique`                        | Removes later duplicates and **preserves first-appearance order**.                                                                                                                                            |
-| `max`                           | The highest numeric entry in a list, ignoring entries that are not numbers. This reads a page count off a pager, whose last link is often a "next" label rather than a number.                                 |
+| `max`                           | The highest numeric entry in a list, ignoring entries that are not numbers. This reads the last page's number off a pager, whose final link is often a "next" label rather than a number. The number keeps the spelling it had, since it goes back into a URL and a site with `page=007` has no `page=7`. |
+| `min`                           | The lowest numeric entry, by the same rules. This reads which page a site calls its first, for `paginate.first`.                                                                                               |
 | `parse_html`                    | Turns a string into a document, so the rest of a pipe or an `ItemList` selector can work on it. This is what reads an HTML fragment delivered inside a JSON field.                                             |
 | `lines_to_html{tag, attr}`      | Wraps each entry of a list in an element. With `attr` the value goes into that attribute instead of becoming text, so `lines_to_html{tag: img, attr: src}` turns a list of image URLs into image elements.     |
 | `paragraphs{block_tags, preserve}` | See below.                                                                                                                                                                                                |

@@ -52,7 +52,7 @@ class TestPaginatedToc:
             first,
             Paginate.model_validate(
                 {
-                    "count": {"css": ".pager a", "all": True, "pipe": ["max"]},
+                    "last": {"css": ".pager a", "all": True, "pipe": ["max"]},
                     "url": "{novel_url}/chapters?page={page}",
                     "concurrent": True,
                 }

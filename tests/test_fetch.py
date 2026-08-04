@@ -3,6 +3,7 @@
 import pytest
 
 from sourcelib.fetch import (
+    DEFAULT_WORKERS,
     Fetched,
     FetchError,
     RecordedFetcher,
@@ -311,7 +312,7 @@ class TestPaginateCount:
         pages, truncated = walk_pages(
             first,
             paginate(
-                count={"css": "#pager a", "all": True, "pipe": ["max"]},
+                last={"css": "#pager a", "all": True, "pipe": ["max"]},
                 url="{origin}/list?page={page}",
             ),
             fetcher,
@@ -325,7 +326,7 @@ class TestPaginateCount:
         fetcher = RecordedFetcher({"https://example.com/list?page=2": rows(1, 2)})
         walk_pages(
             first,
-            paginate(count={"css": "#p a"}, url="{origin}/list?page={page}"),
+            paginate(last={"css": "#p a"}, url="{origin}/list?page={page}"),
             fetcher,
             context_for(ORIGIN),
         )
@@ -337,7 +338,7 @@ class TestPaginateCount:
         fetcher = RecordedFetcher({})
         pages, _ = walk_pages(
             first,
-            paginate(count={"css": "#p a"}, url="{origin}/list?page={page}"),
+            paginate(last={"css": "#p a"}, url="{origin}/list?page={page}"),
             fetcher,
             context_for(ORIGIN),
         )
@@ -350,7 +351,7 @@ class TestPaginateCount:
         fetcher = RecordedFetcher({f"https://e/list?page={n}": rows(1, n) for n in range(2, 7)})
         pages, _ = walk_pages(
             first,
-            paginate(count={"css": "#p a"}, url="https://e/list?page={page}", concurrent=True),
+            paginate(last={"css": "#p a"}, url="https://e/list?page={page}", concurrent=True),
             fetcher,
             context_for(ORIGIN),
             workers=5,
@@ -359,14 +360,17 @@ class TestPaginateCount:
             f"https://e/list?page={n}" for n in range(2, 7)
         ]
 
-    def test_a_limit_truncates_and_says_so(self):
+    def test_a_caller_cap_truncates_and_says_so(self):
+        # The cap belongs to the caller, not the spec: `last` already bounds the range, so a second
+        # bound in the grammar would say the same thing twice. `try --toc-pages` is what passes it.
         first = Document.from_html('<div id="p"><a>9</a></div>', url="https://e/list")
         fetcher = RecordedFetcher({f"https://e/list?page={n}": rows(1, n) for n in range(2, 10)})
         pages, truncated = walk_pages(
             first,
-            paginate(count={"css": "#p a"}, url="https://e/list?page={page}", limit=3),
+            paginate(last={"css": "#p a"}, url="https://e/list?page={page}"),
             fetcher,
             context_for(ORIGIN),
+            limit=3,
         )
         # A silent cap is indistinguishable from a site with fewer pages.
         assert len(pages) == 3 and truncated is True
@@ -375,7 +379,7 @@ class TestPaginateCount:
         first = Document.from_html("<div/>", url="https://e/list")
         pages, _ = walk_pages(
             first,
-            paginate(count={"css": "#absent"}, url="https://e/list?page={page}"),
+            paginate(last={"css": "#absent"}, url="https://e/list?page={page}"),
             RecordedFetcher({}),
             context_for(ORIGIN),
         )
@@ -386,7 +390,7 @@ class TestPaginateCount:
         fetcher = RecordedFetcher({"https://e/novel/x/chapters?p=2": rows(1, 2)})
         walk_pages(
             first,
-            paginate(count={"css": "#p a"}, url="{request_url}?p={page}"),
+            paginate(last={"css": "#p a"}, url="{request_url}?p={page}"),
             fetcher,
             context_for(ORIGIN),
         )
@@ -427,10 +431,11 @@ class TestPaginateWhile:
         fetcher = RecordedFetcher({f"https://e/list?page={n}": rows(1, n) for n in range(2, 20)})
         pages, truncated = walk_pages(
             first,
-            paginate(**{"while": "has_items", "url": "https://e/list?page={page}", "limit": 4}),
+            paginate(**{"while": "has_items", "url": "https://e/list?page={page}"}),
             fetcher,
             context_for(ORIGIN),
             has_items=has_rows,
+            limit=4,
         )
         assert len(pages) == 4 and truncated is True
 
@@ -505,9 +510,10 @@ class TestPaginateNext:
         first = Document.from_html('<a class="next" href="/p2">n</a>', url="https://e/p1")
         pages, truncated = walk_pages(
             first,
-            paginate(next={"css": "a.next", "attr": "href"}, limit=3),
+            paginate(next={"css": "a.next", "attr": "href"}),
             fetcher,
             context_for(ORIGIN),
+            limit=3,
         )
         assert len(pages) == 3 and truncated is True
 
@@ -559,3 +565,101 @@ class TestAnAlternativeFailingInAnotherWay:
                 context_for(ORIGIN),
                 yields=has_rows,
             )
+
+
+class TestConcurrentUntilEmpty:
+    """`while: has_items` fetches a window at a time when asked, and still stops in the right place.
+
+    Nothing tells the walk how many pages there are, so a window is speculative: it must keep pages
+    only up to the first empty one and discard the rest, or a novel gains chapters it does not have.
+    """
+
+    def site(self, last: int):
+        pages = {f"https://example.com/p{n}": rows(3) for n in range(1, last + 1)}
+        pages[f"https://example.com/p{last + 1}"] = rows(0)
+        return RecordedFetcher(pages)
+
+    def walk(self, fetcher, concurrent: bool, cap=None):
+        first = Document.from_html(rows(3), url="https://example.com/p1")
+        return walk_pages(
+            first,
+            paginate(**{"while": "has_items"}, url="{origin}/p{page}", concurrent=concurrent),
+            fetcher,
+            context_for(ORIGIN),
+            has_items=has_rows,
+            limit=cap,
+        )
+
+    @pytest.mark.parametrize("last", [1, 2, 5, 9, 12])
+    def test_it_finds_the_same_pages_either_way(self, last):
+        serial, _ = self.walk(self.site(last), concurrent=False)
+        parallel, _ = self.walk(self.site(last), concurrent=True)
+        assert len(serial) == last
+        assert len(parallel) == len(serial)
+
+    def test_pages_stay_in_order(self):
+        pages, _ = self.walk(self.site(9), concurrent=True)
+        assert [p.url for p in pages] == [f"https://example.com/p{n}" for n in range(1, 10)]
+
+    def test_a_page_after_the_empty_one_is_discarded(self):
+        # The window may reach past the end and find content again, which a badly behaved site can
+        # produce. Keeping it would insert a gap in the chapter list.
+        fetcher = RecordedFetcher(
+            {
+                "https://example.com/p2": rows(3),
+                "https://example.com/p3": rows(0),
+                "https://example.com/p4": rows(3),
+            }
+        )
+        pages, _ = self.walk(fetcher, concurrent=True)
+        assert [p.url for p in pages] == ["https://example.com/p1", "https://example.com/p2"]
+
+    def test_a_caller_cap_still_truncates(self):
+        pages, truncated = self.walk(self.site(20), concurrent=True, cap=3)
+        assert len(pages) == 3 and truncated is True
+
+    def test_it_trades_a_few_wasted_requests_for_the_round_trips(self):
+        serial, parallel = self.site(9), self.site(9)
+        self.walk(serial, concurrent=False)
+        self.walk(parallel, concurrent=True)
+        # Serial stops the moment a page is empty, so it makes exactly one request per page plus
+        # one. A window cannot know where the end is, so it overshoots by at most a window. That
+        # is the whole trade: a bounded number of wasted requests for far fewer round trips.
+        # Nine: pages two to nine, then the empty tenth that ends it. Page one is the stage's
+        # own document and was never a walk request.
+        assert len(serial.calls) == 9
+        assert len(serial.calls) < len(parallel.calls) <= len(serial.calls) + DEFAULT_WORKERS
+
+
+class TestPageSequence:
+    """`first` and `last` are the numbers the site puts on its pages, not a count of them.
+
+    `{page}` was fixed at 2, 3, 4, which is only right for a site numbering from one. A zero-based
+    site therefore skipped its second page, and it failed while reporting success.
+    """
+
+    def walk(self, last: int, **extra):
+        pages = {f"https://example.com/p{n}": rows(2) for n in range(0, 20000)}
+        fetcher = RecordedFetcher(pages)
+        first = Document.from_html(rows(2), url="https://example.com/p1")
+        walk_pages(
+            first,
+            paginate(last={"const": str(last)}, url="{origin}/p{page}", **extra),
+            fetcher,
+            context_for(ORIGIN),
+        )
+        return [url.rsplit("/p", 1)[1] for _, url in fetcher.calls]
+
+    def test_the_default_is_the_one_based_site(self):
+        assert self.walk(5) == ["2", "3", "4", "5"]
+
+    def test_first_reaches_a_zero_based_second_page(self):
+        # novelmtl: the novel page is page 0 and the pager's first link is page=1, so a walk
+        # starting at 2 skipped a hundred chapters.
+        assert self.walk(13, first=0) == [str(n) for n in range(1, 14)]
+
+    def test_a_last_page_at_the_first_fetches_nothing_more(self):
+        assert self.walk(1) == []
+
+    def test_first_and_last_may_be_read_from_the_page(self):
+        assert self.walk(4, first={"const": "0"}) == ["1", "2", "3", "4"]

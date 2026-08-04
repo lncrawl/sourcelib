@@ -70,7 +70,7 @@ class TestPaginate:
         "payload",
         [
             {"while": "has_items", "url": "{origin}/{page}"},
-            {"count": {"css": ".last"}, "url": "{origin}/{page}"},
+            {"last": {"css": ".last"}, "url": "{origin}/{page}"},
             {"next": {"css": "a.next", "attr": "href"}},
         ],
     )
@@ -78,21 +78,27 @@ class TestPaginate:
         assert Paginate.model_validate(payload)
 
     def test_two_terminations_are_refused(self):
-        with pytest.raises(ValidationError, match="only one of while, count, next"):
-            Paginate.model_validate({"while": "has_items", "count": {"css": "b"}})
+        with pytest.raises(ValidationError, match="only one of while, last, next"):
+            Paginate.model_validate({"while": "has_items", "last": {"css": "b"}})
 
     def test_url_is_invalid_with_next(self):
         with pytest.raises(ValidationError, match="url is invalid with next"):
             Paginate.model_validate({"next": {"css": "a"}, "url": "{origin}/{page}"})
 
-    def test_concurrent_needs_a_known_count(self):
-        # while and next cannot know what to request next until the current page is read.
-        with pytest.raises(ValidationError, match="concurrent is valid only with count"):
-            Paginate.model_validate({"while": "has_items", "url": "u", "concurrent": True})
+    def test_concurrent_is_refused_with_next(self):
+        # A next link is only known once the page holding it has been read, so there is nothing to
+        # run in parallel. `count` and `while` both address pages by number and can.
+        with pytest.raises(ValidationError, match="concurrent is invalid with next"):
+            Paginate.model_validate({"next": {"css": "a"}, "concurrent": True})
+
+    def test_concurrent_with_while_is_valid(self):
+        assert Paginate.model_validate(
+            {"while": "has_items", "url": "u", "concurrent": True}
+        ).concurrent
 
     def test_concurrent_with_count_is_valid(self):
         assert Paginate.model_validate(
-            {"count": {"css": ".last"}, "url": "u", "concurrent": True}
+            {"last": {"css": ".last"}, "url": "u", "concurrent": True}
         ).concurrent
 
 
@@ -270,3 +276,16 @@ class TestRoundTrip:
         once = load_document(original)
         twice = load_document(once.model_dump(by_alias=True, exclude_defaults=True))
         assert twice == once
+
+    def test_unset_concurrent_is_on_where_it_can_be(self):
+        for condition in ({"last": {"css": "b"}}, {"while": "has_items"}):
+            assert Paginate.model_validate({**condition, "url": "u"}).runs_concurrently
+
+    def test_unset_concurrent_is_off_with_next(self):
+        # Not an error, just inapplicable: nothing declared it and it cannot apply.
+        assert not Paginate.model_validate({"next": {"css": "a"}}).runs_concurrently
+
+    def test_false_forces_one_at_a_time(self):
+        assert not Paginate.model_validate(
+            {"last": {"css": "b"}, "url": "u", "concurrent": False}
+        ).runs_concurrently
