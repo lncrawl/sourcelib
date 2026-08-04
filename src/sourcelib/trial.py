@@ -28,7 +28,7 @@ from sourcelib.spec.loader import parse_yaml
 from sourcelib.spec.model import SourceSpec
 from sourcelib.spec.resolve import resolve_document
 
-__all__ = ["Finding", "Trial", "format_trial", "run_trial"]
+__all__ = ["COMPARED", "Finding", "Trial", "format_trial", "run_trial", "summarise"]
 
 #: How much of a value to show. Enough to tell right from wrong, short enough to scan.
 PREVIEW = 160
@@ -36,10 +36,16 @@ PREVIEW = 160
 
 @dataclass
 class Finding:
-    """One thing a run learned about one field."""
+    """One thing a run learned about one field.
+
+    `required` is what separates a failure from a warning. Section 4.4 makes a missing cover,
+    author, tag list or synopsis a warning, because real pages omit them often enough that
+    failing would reject working sources.
+    """
 
     field: str
     ok: bool
+    required: bool = True
     detail: str = ""
     count: Optional[int] = None
     preview: str = ""
@@ -68,6 +74,9 @@ class Trial:
     chapters: int = 0
     volumes: int = 0
     sampled: List[Dict[str, Any]] = field(default_factory=list)
+    #: The values a fixture records and compares. Kept here so recording and replaying read
+    #: the same structure rather than each reconstructing it.
+    summary: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -105,10 +114,17 @@ def run_trial(
 
     trial = Trial(host=path.stem, url=url)
 
-    def note(field_name: str, ok: bool, detail: str = "", value: Any = None) -> None:
+    def note(
+        field_name: str,
+        ok: bool,
+        detail: str = "",
+        value: Any = None,
+        required: bool = True,
+    ) -> None:
         trial.add(
             field=field_name,
             ok=ok,
+            required=required,
             detail=detail,
             count=_count(value),
             preview=_preview(value),
@@ -152,16 +168,40 @@ def run_trial(
         trial.sampled.append(_try_chapter(interpreter, novel, chapter, note))
 
     _carry(trial, report)
-    trial.ok = trial.error is None and all(f.ok for f in trial.findings)
+    trial.summary = summarise(novel, trial.sampled)
+    trial.ok = trial.error is None and all(f.ok for f in trial.findings if f.required)
     return trial
+
+
+#: What a fixture stores and compares.
+COMPARED = ("title", "cover_url", "authors", "tags", "synopsis", "language")
+
+
+def summarise(novel: Novel, sampled: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The result in the form a fixture records.
+
+    Chapter *count* rather than the chapters, and body *lengths* rather than bodies: a fixture
+    exists to notice a spec regression, and storing every body would make the file enormous
+    while making a one-word site change fail the suite.
+    """
+    summary: Dict[str, Any] = {name: getattr(novel, name) for name in COMPARED}
+    summary["chapters"] = len(novel.chapters)
+    summary["volumes"] = len(novel.volumes)
+    summary["first_chapter"] = novel.chapters[0].title if novel.chapters else ""
+    summary["last_chapter"] = novel.chapters[-1].title if novel.chapters else ""
+    summary["bodies"] = [{"id": s.get("id"), "characters": s.get("characters", 0)} for s in sampled]
+    return summary
 
 
 def _note_novel(note: Any, novel: Novel) -> None:
     note("novel.title", bool(novel.title), "", novel.title)
-    note("novel.cover", bool(novel.cover_url), "", novel.cover_url)
-    note("novel.authors", bool(novel.authors), "", novel.authors)
-    note("novel.tags", bool(novel.tags), "", novel.tags)
-    note("novel.synopsis", bool(novel.synopsis), "", novel.synopsis)
+    for name, value in (
+        ("cover", novel.cover_url),
+        ("authors", novel.authors),
+        ("tags", novel.tags),
+        ("synopsis", novel.synopsis),
+    ):
+        note(f"novel.{name}", bool(value), "", value, required=False)
 
 
 def _sample(novel: Novel, count: int) -> List[Chapter]:
@@ -212,7 +252,7 @@ def format_trial(trial: Trial) -> str:
     out: List[str] = [f"{trial.host}  {trial.url}", ""]
 
     for finding in trial.findings:
-        mark = "ok  " if finding.ok else "FAIL"
+        mark = "ok  " if finding.ok else ("FAIL" if finding.required else "none")
         detail = f"  {finding.detail}" if finding.detail else ""
         out.append(f"  {mark}  {finding.field}{detail}{finding.where()}")
         if finding.preview:

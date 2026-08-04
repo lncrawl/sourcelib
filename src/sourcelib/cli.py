@@ -137,6 +137,53 @@ def _explain(url: str, as_json: bool, render: bool) -> int:
     return 0
 
 
+def _record(path: Path, url: str, root: Optional[Path]) -> int:
+    from sourcelib.fixtures import Recording, RecordingFetcher, save
+    from sourcelib.http import ScraperFetcher
+    from sourcelib.trial import format_trial, run_trial
+
+    repo = _repo_root(root, [path])
+    with ScraperFetcher(origin=url) as live:
+        recorder = RecordingFetcher(live)
+        trial = run_trial(path, url, recorder, root=repo)
+
+    if not trial.ok:
+        # Recording a spec that does not work would bake the failure into the suite.
+        print(format_trial(trial), file=sys.stderr)
+        print("not recorded: make `try` pass first", file=sys.stderr)
+        return 1
+
+    target = save(repo, path.stem, Recording(url, recorder.pages, trial.summary))
+    print(f"recorded {len(recorder.pages)} page(s) to {target}")
+    return 0
+
+
+def _fixtures(root: Optional[Path], strict: bool) -> int:
+    from sourcelib.fixtures import hosts, replay
+
+    repo = _repo_root(root, [])
+    known = hosts(repo)
+    if not known:
+        print("no recordings found", file=sys.stderr)
+        return 1 if strict else 0
+
+    failed = 0
+    for host in known:
+        spec = repo / "specs" / f"{host}.yaml"
+        if not spec.exists():
+            failed += 1
+            print(f"{host}: recorded, but specs/{host}.yaml is gone", file=sys.stderr)
+            continue
+        ok, differences = replay(repo, host, spec)
+        if not ok:
+            failed += 1
+            for line in differences:
+                print(f"{host}: {line}", file=sys.stderr)
+
+    print(f"{len(known) - failed} of {len(known)} recordings replay unchanged")
+    return 1 if failed else 0
+
+
 def _schema(output: Optional[Path], check_only: bool) -> int:
     if output is None:
         print(render(), end="")
@@ -163,6 +210,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     check = sub.add_parser("check", parents=[rooted], help="resolve and validate documents")
     check.add_argument("paths", nargs="*", type=Path, default=[Path(f) for f in FOLDERS])
     check.add_argument("--strict", action="store_true", help="fail when nothing was found")
+    check.add_argument(
+        "--fixtures",
+        action="store_true",
+        help="replay recordings instead, offline. Fixtures test the spec; only a live run "
+        "tests the site",
+    )
 
     resolve = sub.add_parser(
         "resolve", parents=[rooted], help="print one document with its ancestors merged"
@@ -185,6 +238,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "a broken join across a multi-page body through",
     )
 
+    keep = sub.add_parser(
+        "record", parents=[rooted], help="save a site's responses so a spec can be tested offline"
+    )
+    keep.add_argument("path", type=Path)
+    keep.add_argument("url", help="a novel URL on that host")
+
     digest = sub.add_parser(
         "explain", help="a structural digest of a page, for writing a spec against it"
     )
@@ -205,6 +264,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "check":
+        if args.fixtures:
+            return _fixtures(args.root, args.strict)
         return _check(args.paths, args.root, args.strict)
     if args.command == "resolve":
         return _resolve(args.path, args.root, args.json)
@@ -212,6 +273,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _try(args.path, args.url, args.root, args.json, args.sample)
     if args.command == "explain":
         return _explain(args.url, args.json, args.render)
+    if args.command == "record":
+        return _record(args.path, args.url, args.root)
     if args.command == "schema":
         return _schema(args.output, args.check)
     return 1  # pragma: no cover - argparse rejects an unknown command first
