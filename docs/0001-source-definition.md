@@ -113,12 +113,20 @@ SourceSpec:
 ```
 
 `spec` is REQUIRED. It names the version of **the whole contract**: this model, the step registry in
-§6, and the hook points in §7. An interpreter MUST refuse to load a spec whose `spec` value it does
-not implement, and MUST NOT attempt partial interpretation.
+§6, and the hook points in §7. An interpreter implements every version up to the one it was written
+for. It MUST refuse to load a document whose `spec` exceeds that, MUST NOT attempt partial
+interpretation, and MUST NOT refuse a document whose `spec` is lower.
 
-Adding a step to the registry or a hook point is a version bump exactly like adding a field. Without
-that rule the document stays schema-valid, so an old interpreter accepts it and then fails on an
-unknown step name during a crawl, once per chapter, with nothing indicating the cause.
+A change to the contract is either **breaking** or **additive**:
+
+| Class        | What it does                                                     | `spec`         |
+| ------------ | ---------------------------------------------------------------- | -------------- |
+| **Breaking** | Changes what an existing key, step or point means, or removes one | MUST increment |
+| **Additive** | Adds a key, step or point, leaving existing meanings intact       | MUST NOT change |
+
+The additive class depends on an unrecognised name being refused rather than ignored: §3.9.1 for a key,
+§6.1 for a step, §3.9.2 for a hook point, each at load time and each in an error naming what was not
+recognised. An implementation that does not enforce all three MUST treat every change as breaking.
 
 `base_url`, when present, MUST be an absolute `http` or `https` URL whose host matches the document's
 filename (§8.2). Its absence makes the spec abstract.
@@ -440,6 +448,7 @@ is sitting on the page named further down.
 Paginate:
     while:      Literal["has_items"] | None = None
     first:      int | Extractor = 1
+    step:       int = 1
     last:       int | Extractor | None = None
     next:       Extractor | None = None
     url:        UrlTemplate | None = None
@@ -495,8 +504,28 @@ would be a way of saying the same thing twice, and a caller that wants a tighter
 reasons applies it without the spec declaring anything. An implementation SHOULD report when it
 truncated a walk, because a silent cap is indistinguishable from a site with fewer pages.
 
-A site that addresses a page by the index of its first item rather than by a page number is **not**
-described by these. That is a different mechanism, not a variant of this one, and it needs a hook.
+#### 4.5.1 Stride
+
+`step` is how much `{page}` advances between pages, defaulting to 1. The sequence is `first`,
+`first + step`, `first + 2 × step`, and so on, bounded by `last` or by `while`.
+
+A site that addresses a page by the **index of its first row** rather than by a page number sets `step`
+to the page size. `{page}` then counts rows:
+
+```yaml
+paginate:
+  first: 1
+  step: 100
+  last: { css: "#total" }
+  url: "{origin}/feeds/posts/summary?alt=atom&max-results=100&start-index={page}"
+```
+
+`step` MUST be at least 1. It does not affect concurrency: every address is computable from `first`,
+`step` and `last` whatever the stride.
+
+A page size the host does not honour breaks this, because the stride and the number of rows returned
+then disagree and the walk skips those it was not given. The page size a spec names MUST therefore be
+one the host serves in full.
 
 `paginate` is the only iteration in this format. See §12.
 
@@ -538,6 +567,7 @@ ItemList:
     sort_by: str | None = None
     reverse: bool = False
     fields:  dict[str, Extractor] = {}
+    require: list[str] = []
 ```
 
 `ItemList` describes a repeated structure: a container selected by `css` or `json`, and per-row
@@ -596,6 +626,28 @@ perfect selector or a hook.
 
 Implementations SHOULD report how many items were skipped. A large number means the selector is wrong
 even though the crawl succeeded.
+
+**`require` names further fields a row cannot do without.** A row where any of them resolves empty MUST
+be skipped by the same rule, and the count MUST be reported the same way. `require` adds to what the
+stage requires and MUST NOT remove it: a chapter still needs a `url`.
+
+This rejects a row on a field the stage does not use. The condition lives in that field's pipe: a filter
+step yields nothing when it rejects (§6.2), so the field resolving empty is the rejection.
+
+```yaml
+items:
+  json: "$"
+  require: [parent]
+  fields:
+    title: { json: name }
+    url: { json: link }
+    parent: { json: parent, pipe: [{ reject: { pattern: "^[1-9]" } }] }
+```
+
+A category with a non-zero `parent` is a section of a novel rather than a novel, and neither its `title`
+nor its `link` says so.
+
+An implementation MUST reject, at load time, a `require` naming a field the list does not declare.
 
 **A `volumes` row has no required field, so the skip rule does not protect it.** An over-broad `items`
 selector self-corrects; an over-broad `volumes` selector silently produces junk volumes with empty
@@ -687,6 +739,9 @@ paginate: { while: has_items }    # correct
 paginate: { while_: has_items }   # rejected
 ```
 
+An interpreter MUST reject a key it does not recognise, at every node of the model, at load time, in
+an error naming the key. It MUST NOT ignore one.
+
 #### 3.9.2 Hook points
 
 A hook point is `<stage>.<name>`, where `<stage>` is a stage this document defines and `<name>` is
@@ -717,6 +772,9 @@ define, at load time.
 An implementation MUST publish a JSON Schema [JSONSCHEMA] for this model. The schema is generated from
 the model, and CI MUST fail if a regenerated schema differs from the committed one, so the two cannot
 drift.
+
+The schema validates a raw document, in which any key may be `null` to delete an inherited value
+(§5.1). Every property except `spec` MUST therefore admit `null`, whatever the field's own type.
 
 ## 4. Evaluation semantics
 
@@ -752,7 +810,7 @@ closed. There are no expressions, no arithmetic and no conditionals.
 | `{query}`                  | `search`                                                        |
 | `{novel_url}`              | `novel`, `toc`, `chapter`                                       |
 | `{request_url}`            | Any `paginate.url`. The URL the stage's own request resolved to |
-| `{page}`                   | Any `paginate.url`                                              |
+| `{page}`                   | Any `paginate.url`. The page's number, or its first row's index |
 | `{chapter.*}`              | `chapter`, including extras captured by `toc` fields            |
 | `{item.*}`                 | Inside an `ItemList` field, a sibling field declared earlier    |
 | `{username}`, `{password}` | The `login` hook only                                           |
@@ -866,9 +924,9 @@ keeping everything the parent knew, and order is already "try until one works" s
 front is meaningful.
 
 `pipe` replaces, like every other list. Step order in a pipe is semantic, so a child adding `trim`
-would have it run before the parent's `paragraphs`, which is almost certainly not what it meant. A
-child that wants the parent's steps plus its own writes both, which also makes what runs visible in the
-file.
+would have it run before the parent's `paragraphs`, which is almost certainly not what it meant. A child
+wanting the parent's steps plus its own either writes both, or references the parent's named pipe
+(§6.4) as a step in its own.
 
 ### 5.2 Limits
 
@@ -901,12 +959,17 @@ novel:
 
 ### 6.1 Steps
 
-Every step declares what it consumes and produces. An implementation MUST reject a pipe whose types do
-not connect, at validation time rather than during a crawl.
+Every step declares what it consumes and produces. At load time an implementation MUST reject a pipe
+whose types do not connect, and MUST reject a step naming nothing in the registry, in an error naming
+the step. Both checks run on the **resolved** document, with named pipes (§6.4) expanded.
+
+A pipe's input kind is `list` where the Extractor sets `all`, and otherwise unconstrained: what an
+Extractor hands its pipe depends on `attr` and on §3.4. The type check therefore constrains the second
+step onward.
 
 | In → out          | Steps                                                                                                                                                                                   |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| node → node       | `strip_tags(names)`, `strip_css(selectors)`, `unwrap(names)`, `unwrap_all`, `keep_attrs(names)`, `unlazy_images`, `drop_leading{matches, within}`, `drop_empty_nodes`                   |
+| node → node       | `strip_tags(names)`, `strip_css(selectors)`, `unwrap(names)`, `unwrap_all`, `keep_attrs(names)`, `unlazy_images`, `drop_leading{matches, within}`, `drop_empty_nodes`, `strip_matching{pattern, tags}`                   |
 | node → html       | `paragraphs{block_tags, preserve}`, `inner_html`                                                                                                                                        |
 | text → node       | `parse_html`                                                                                                                                                                            |
 | node → text       | `text`                                                                                                                                                                                  |
@@ -927,6 +990,7 @@ differently in the interpreter, the web preview and any other reader.
 | `inner_html`                    | The node's children, serialised. The node's own tag is not included. Identical to `attr: html`.                                                                                                               |
 | `strip_tags(names)`             | Removes each element having one of these tag names, **including its content**.                                                                                                                               |
 | `strip_css(selectors)`          | The same, selecting by selector rather than by tag name.                                                                                                                                                      |
+| `strip_matching{pattern, tags}` | Removes each element whose text matches `pattern`, **including its content**. Where `tags` is given, only elements having one of those names are considered; where it is absent, only elements having no element children are. An element containing a match also contains the matching text, so an unrestricted search would remove an ancestor of the intended target. Removes nothing when `pattern` is absent. |
 | `unwrap(names)`                 | Replaces each element having one of these names with its children, **keeping its content**.                                                                                                                   |
 | `unwrap_all`                    | Unwraps every descendant, leaving the node's text with no markup inside it.                                                                                                                                   |
 | `keep_attrs(names)`             | Removes every attribute except these, from the node and from every descendant.                                                                                                                                |
@@ -995,7 +1059,13 @@ control flow.
 
 ### 6.4 Named pipes and defaults
 
-`pipes` defines reusable pipes by name, inheritable through `extends`.
+`pipes` defines reusable pipes by name, inheritable through `extends`. A `pipe` MAY be a name instead of
+a list.
+
+A step that is a string naming an entry in `pipes` expands to that entry's steps, recursively, before
+the pipe is validated or applied; a string naming no entry is a step name. `pipes` is a mapping, so a
+child redefining a name replaces the parent's entry (§5.1). An entry reaching itself at any depth MUST be
+rejected at load time.
 
 **Every field kind has a default pipe, and this is it.** A field with no `pipe` gets the one for its
 kind. These are normative, because an unspecified default means the same document behaves differently
@@ -1033,8 +1103,8 @@ body: { css: "#content" }
 This applies to defaults only. A pipe the spec declares is used exactly as written, and a type mismatch
 in it is a validation error under §6.1.
 
-Declaring `pipe` **replaces** the default rather than extending it. A spec that wants the default plus
-one more step names the default explicitly, so what runs is always visible in the file.
+Declaring `pipe` **replaces** the default rather than extending it. A spec wanting the default plus one
+more step names the default's steps explicitly, or references a named pipe holding them.
 
 Two things are deliberately absent. **No title casing**, because sites generally capitalise their own
 titles correctly and the ones that do not are not improved by a blanket rule that mangles acronyms and

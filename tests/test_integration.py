@@ -196,6 +196,6 @@ class TestWhileHasItems:
             Paginate.model_validate({"while": "has_items", "url": f"{ORIGIN}/list?page={{page}}"}),
             fetcher,
             context_for(ORIGIN),
-            has_items=lambda d: bool(rows_of(d)),
+            count_items=lambda d: len(rows_of(d)),
         )
         assert len(pages) == 2

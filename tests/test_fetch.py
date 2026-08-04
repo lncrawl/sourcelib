@@ -34,8 +34,12 @@ def rows(count, page=1):
     return f"<html><body><ul>{items}</ul></body></html>"
 
 
+def count_rows(document):
+    return len(document.node.select("ul li")) if document.node else 0
+
+
 def has_rows(document):
-    return bool(document.node and document.node.select("ul li"))
+    return count_rows(document) > 0
 
 
 class TestEncodePayload:
@@ -413,7 +417,7 @@ class TestPaginateWhile:
             paginate(**{"while": "has_items", "url": "https://e/list?page={page}"}),
             fetcher,
             context_for(ORIGIN),
-            has_items=has_rows,
+            count_items=count_rows,
         )
         assert len(pages) == 2
 
@@ -424,7 +428,7 @@ class TestPaginateWhile:
             paginate(**{"while": "has_items", "url": "https://e/list?page={page}"}),
             RecordedFetcher({}),
             context_for(ORIGIN),
-            has_items=has_rows,
+            count_items=count_rows,
         )
         assert len(pages) == 1
 
@@ -436,7 +440,7 @@ class TestPaginateWhile:
             paginate(**{"while": "has_items", "url": "https://e/list?page={page}"}),
             fetcher,
             context_for(ORIGIN),
-            has_items=has_rows,
+            count_items=count_rows,
             limit=4,
         )
         assert len(pages) == 4 and truncated is True
@@ -588,7 +592,7 @@ class TestConcurrentUntilEmpty:
             paginate(**{"while": "has_items"}, url="{origin}/p{page}", concurrent=concurrent),
             fetcher,
             context_for(ORIGIN),
-            has_items=has_rows,
+            count_items=count_rows,
             limit=cap,
         )
 
@@ -705,3 +709,101 @@ class TestNumberedPagesKeepTheirOrder:
             context_for(ORIGIN),
         )
         assert [p.url for p in pages] == [f"https://example.com/p{n}" for n in range(1, last + 1)]
+
+
+class TestPaginateStep:
+    """A stride other than 1, for a site addressing a page by the index of its first row.
+
+    Measured on Blogger: at a page size it honours, `max-results=100` returns exactly 100 rows at
+    every offset, so the addresses are 1, 101, 201 and the stride is fixed. Only past its response
+    size cap does it return fewer than asked, which is why the page size belongs in the spec.
+    """
+
+    def offsets(self, fetcher):
+        """Which start values were requested, in numeric order.
+
+        Sorted rather than as issued: a `while` walk requests a window of pages at once, so the
+        order the calls arrive in belongs to the thread pool.
+        """
+        return sorted(int(url.rsplit("=", 1)[1]) for _, url in fetcher.calls)
+
+    def test_it_strides_by_the_page_size(self):
+        first = Document.from_html(rows(3), url="https://e/f?start=1")
+        fetcher = RecordedFetcher(
+            {"https://e/f?start=101": rows(3, 2), "https://e/f?start=201": rows(0)}
+        )
+        pages, _ = walk_pages(
+            first,
+            paginate(**{"while": "has_items", "step": 100, "url": "https://e/f?start={page}"}),
+            fetcher,
+            context_for(ORIGIN),
+            count_items=count_rows,
+        )
+        # 101 and 201, never 4 or 6: the stride is the page size and not one row.
+        assert self.offsets(fetcher)[:2] == [101, 201]
+        assert all(offset % 100 == 1 for offset in self.offsets(fetcher))
+        assert len(pages) == 2
+
+    def test_a_numbered_walk_strides_by_the_page_size_too(self):
+        first = Document.from_html(rows(3), url="https://e/f?start=1")
+        fetcher = RecordedFetcher({f"https://e/f?start={n}": rows(3, n) for n in (101, 201, 301)})
+        pages, _ = walk_pages(
+            first,
+            paginate(last=301, step=100, url="https://e/f?start={page}"),
+            fetcher,
+            context_for(ORIGIN),
+            count_items=count_rows,
+        )
+        assert self.offsets(fetcher) == [101, 201, 301]
+        assert len(pages) == 4
+
+    def test_first_and_step_compose(self):
+        # A zero-based feed of 50-row pages: 0, 50, 100.
+        first = Document.from_html(rows(2), url="https://e/f?start=0")
+        fetcher = RecordedFetcher(
+            {"https://e/f?start=50": rows(2, 2), "https://e/f?start=100": rows(0)}
+        )
+        walk_pages(
+            first,
+            paginate(
+                **{"while": "has_items", "first": 0, "step": 50, "url": "https://e/f?start={page}"}
+            ),
+            fetcher,
+            context_for(ORIGIN),
+            count_items=count_rows,
+        )
+        assert self.offsets(fetcher)[0] == 50
+
+    def test_a_last_read_from_the_page_bounds_a_strided_walk(self):
+        # `last` is the final value of {page}, so a total row count bounds an offset walk directly.
+        first = Document.from_html(
+            '<html><body><ul><li><a href="/c/1">Ch</a></li></ul><b id="t">201</b></body></html>',
+            url="https://e/f?start=1",
+        )
+        fetcher = RecordedFetcher({f"https://e/f?start={n}": rows(1, n) for n in (101, 201)})
+        pages, _ = walk_pages(
+            first,
+            paginate(
+                last={"css": "#t"},
+                step=100,
+                url="https://e/f?start={page}",
+            ),
+            fetcher,
+            context_for(ORIGIN),
+            count_items=count_rows,
+        )
+        assert len(pages) == 3
+
+    def test_the_default_stride_is_unchanged(self):
+        first = Document.from_html(rows(1), url="https://e/list")
+        fetcher = RecordedFetcher(
+            {"https://e/list?page=2": rows(1, 2), "https://e/list?page=3": rows(0)}
+        )
+        pages, _ = walk_pages(
+            first,
+            paginate(**{"while": "has_items", "url": "https://e/list?page={page}"}),
+            fetcher,
+            context_for(ORIGIN),
+            count_items=count_rows,
+        )
+        assert len(pages) == 2

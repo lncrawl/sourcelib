@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import json as jsonlib
 import re
+import warnings
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 from urllib.parse import urljoin
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, Tag, XMLParsedAsHTMLWarning
 
 from sourcelib.spec.model import Extractor
 from sourcelib.transform import DEFAULT_PARSER, REGISTRY, apply_pipe
@@ -87,7 +88,13 @@ class Document:
         parser: str = DEFAULT_PARSER,
         headers: Optional[Mapping[str, str]] = None,
     ) -> "Document":
-        return cls(url=url, node=BeautifulSoup(markup, parser), text=markup, headers=headers)
+        with warnings.catch_warnings():
+            # An Atom or RSS feed is a legitimate source document, and lxml reads one correctly:
+            # this warning only advises using an XML parser instead. Suppressed because it would
+            # otherwise print a paragraph to stderr on every page a feed-backed source fetches.
+            warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
+            node = BeautifulSoup(markup, parser)
+        return cls(url=url, node=node, text=markup, headers=headers)
 
     @classmethod
     def from_json(

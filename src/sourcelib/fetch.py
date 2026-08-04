@@ -335,7 +335,7 @@ def walk_pages(
     paginate: Optional[Paginate],
     fetcher: Fetcher,
     context: Mapping[str, Any],
-    has_items: Optional[Callable[[Document], bool]] = None,
+    count_items: Optional[Callable[[Document], int]] = None,
     parser: str = DEFAULT_PARSER,
     headers: Optional[Mapping[str, str]] = None,
     encoding: Optional[str] = None,
@@ -346,6 +346,10 @@ def walk_pages(
 
     The first page is the stage's own request; `paginate.url` produces the second onward,
     because sites routinely address the first page differently.
+
+    *count_items* answers how many rows a page produced. A count rather than a boolean because
+    `by: items` needs the number to address the page after it, and "did it yield anything" is
+    the same question asked less precisely.
     """
     if paginate is None:
         return [first], False
@@ -357,7 +361,7 @@ def walk_pages(
             first, paginate, fetcher, context, parser, headers, encoding, workers, limit
         )
     return _until_empty(
-        first, paginate, fetcher, context, has_items, parser, headers, encoding, workers, limit
+        first, paginate, fetcher, context, count_items, parser, headers, encoding, workers, limit
     )
 
 
@@ -418,15 +422,13 @@ def _fetch_numbered(
     workers: int,
     cap: Optional[int],
 ) -> Tuple[List[Document], bool]:
-    # `count` yields the number of the *last* page, and `start` and `step` say how to reach it. The
-    # defaults, 2 and 1, are the one-based site: the stage's own request already produced page 1. A
-    # site numbering from zero sets `start: 1`, and one addressing pages by the index of their first
-    # item sets `step` to the page size. Without these the sequence was fixed at 2, 3, 4, so a
-    # zero-based site silently lost a page while reporting success.
-    # The stage's own request produced page `first`, so the walk covers the ones after it.
-    begin = _number(paginate.first, first, 1) + 1
-    end = _number(paginate.last, first, begin - 1)
-    wanted = list(range(begin, end + 1))
+    # The stage's own request produced page `first`, so the walk covers the ones after it. Without
+    # `first` the sequence was fixed at 2, 3, 4, and a site numbering from zero silently lost a page
+    # while reporting success.
+    origin = _number(paginate.first, first, 1)
+    begin = origin + paginate.step
+    end = _number(paginate.last, first, begin - paginate.step)
+    wanted = list(range(begin, end + 1, paginate.step))
 
     truncated = bool(cap and len(wanted) + 1 > cap)
     if cap:
@@ -453,25 +455,29 @@ def _until_empty(
     paginate: Paginate,
     fetcher: Fetcher,
     context: Mapping[str, Any],
-    has_items: Optional[Callable[[Document], bool]],
+    count_items: Optional[Callable[[Document], int]],
     parser: str,
     headers: Optional[Mapping[str, str]],
     encoding: Optional[str],
     workers: int = DEFAULT_WORKERS,
     cap: Optional[int] = None,
 ) -> Tuple[List[Document], bool]:
-    if has_items is None:
+    if count_items is None:
         raise FetchError("while: has_items needs a way to tell whether a page yielded rows")
 
+    def has_items(document: Document) -> bool:
+        return count_items(document) > 0
+
     pages = [first]
-    page = _number(paginate.first, first, 1) + 1
-    stride = min(max(1, workers), SPECULATIVE_WORKERS) if paginate.runs_concurrently else 1
+    step = paginate.step
+    page = _number(paginate.first, first, 1) + step
+    window = min(max(1, workers), SPECULATIVE_WORKERS) if paginate.runs_concurrently else 1
 
     while True:
         if cap and len(pages) >= cap:
             return pages, True
 
-        wanted = list(range(page, page + stride))
+        wanted = list(range(page, page + window * step, step))
         if cap:
             wanted = wanted[: cap - len(pages)]
 
@@ -484,7 +490,7 @@ def _until_empty(
         # Not a licence to flood a host: the pace a spec asks for is applied per origin underneath,
         # so a window shares one budget rather than each request getting its own.
         batch = _fetch_window(
-            wanted, paginate, fetcher, context, first.url, parser, headers, encoding, stride
+            wanted, paginate, fetcher, context, first.url, parser, headers, encoding, window
         )
 
         for document in batch:
@@ -494,7 +500,7 @@ def _until_empty(
 
         if len(batch) < len(wanted):
             return pages, bool(cap and len(pages) >= cap)
-        page += len(wanted)
+        page += len(wanted) * step
 
 
 def _fetch_window(

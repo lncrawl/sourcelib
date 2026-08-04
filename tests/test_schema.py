@@ -71,3 +71,40 @@ class TestGenerator:
     def test_it_is_an_unknown_keyword_a_validator_ignores(self):
         jsonschema = pytest.importorskip("jsonschema")
         jsonschema.Draft202012Validator.check_schema(build())
+
+
+class TestDeletionIsRepresentable:
+    """A raw document may set any key to null to delete what an ancestor set.
+
+    The schema validates raw documents, so it has to permit that. It did not, which made the one
+    mechanism for "not this" fail CI on a spec that resolved correctly: a novelfull child replacing
+    the inherited `from` with a `page` had no other way to remove it.
+    """
+
+    def test_a_list_valued_field_accepts_null(self):
+        schema = build()
+        request = schema["$defs"]["Request"]["properties"]["from"]
+        assert {"type": "null"} in request["anyOf"]
+
+    def test_a_nested_model_field_accepts_null(self):
+        schema = build()
+        toc = schema["properties"]["toc"]
+        assert {"type": "null"} in toc["anyOf"]
+
+    def test_spec_does_not(self):
+        # Deleting the version a document declares is never meaningful.
+        assert "anyOf" not in build()["properties"]["spec"]
+
+    def test_the_description_survives_the_wrapping(self):
+        # Descriptions are what supply editor hover text, so losing them to the rewrite would
+        # quietly remove the format's own documentation.
+        assert build()["$defs"]["Paginate"]["properties"]["step"].get("description")
+
+    def test_a_document_deleting_an_inherited_key_validates(self):
+        jsonschema = pytest.importorskip("jsonschema")
+        document = {
+            "spec": 1,
+            "base_url": "https://e.test/",
+            "toc": {"request": {"from": None, "page": "novel"}},
+        }
+        jsonschema.Draft202012Validator(build()).validate(document)

@@ -214,7 +214,16 @@ class TestDefaultPipes:
         from sourcelib.transform import REGISTRY
 
         assert _NODE_STEPS == {n for n, s in REGISTRY.items() if s.takes == "node"}
-        assert len(_NODE_STEPS) == 11
+        # The six the hand-written list had left out, named rather than counted: a count needs
+        # editing whenever a node step is added, and says nothing about this rule either way.
+        assert {
+            "drop_leading",
+            "keep_attrs",
+            "drop_empty_nodes",
+            "unwrap_all",
+            "inner_html",
+            "text",
+        } <= _NODE_STEPS
 
     @pytest.mark.parametrize(
         "first",
@@ -333,3 +342,34 @@ class TestErrors:
     def test_a_css_selector_without_a_document_is_an_error(self):
         with pytest.raises(ExtractError, match="needs a parsed document"):
             read(Document(url="https://example.com/"), css="h1")
+
+
+class TestFeedMarkup:
+    """An Atom feed is a source document, not a mistake.
+
+    Blogger's chapter list is one, and lxml reads it correctly. Only the advisory warning had to
+    go: unsuppressed it prints a paragraph to stderr for every page such a source fetches.
+    """
+
+    ATOM = (
+        "<?xml version='1.0' encoding='UTF-8'?>"
+        "<feed xmlns='http://www.w3.org/2005/Atom'><entry>"
+        "<title type='text'>Ch 1</title>"
+        "<link rel='replies' href='https://e/wrong'/>"
+        "<link rel='alternate' type='text/html' href='https://e/c/1'/>"
+        "</entry></feed>"
+    )
+
+    def test_it_parses_without_warning(self, recwarn):
+        document = Document.from_html(self.ATOM, url="https://e/feed")
+        assert [str(w.category.__name__) for w in recwarn] == []
+        assert document.node is not None
+
+    def test_an_entry_link_is_selectable_by_rel(self):
+        document = Document.from_html(self.ATOM, url="https://e/feed")
+        assert document.node is not None
+        entry = document.node.select_one("entry")
+        assert entry is not None
+        link = entry.select_one('link[rel="alternate"]')
+        assert link is not None
+        assert link.get("href") == "https://e/c/1"

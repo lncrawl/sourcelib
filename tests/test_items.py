@@ -281,3 +281,68 @@ class TestSortRowsDirectly:
         spec = items(css="li", fields={"t": {}})
         rows, _ = read_rows(spec, document)
         assert [r.get("t") for r in sort_rows(rows, spec)] == ["a", "b"]
+
+
+CATEGORIES = """<html><body><ul>
+  <li class="row" data-parent="0"><a href="/category/alpha">Alpha</a></li>
+  <li class="row" data-parent="7"><a href="/category/beta-sub">Beta sub</a></li>
+  <li class="row" data-parent="0"><a href="/category/gamma">Gamma</a></li>
+</ul></body></html>"""
+
+
+class TestRequire:
+    """Dropping a row on a field the stage does not need, per RFC-0001 section 3.8.
+
+    The mechanism is the existing skip rule plus a filter step: `reject` yields nothing when it
+    matches, so the field resolves empty and the row goes. Before this, a row could only be
+    rejected on `url` or `title`, and none of the real cases read either.
+    """
+
+    def document(self):
+        return Document.from_html(CATEGORIES, url="https://e/wp-json/categories")
+
+    def spec(self, **extra):
+        fields = {"title": {"css": "a"}, "url": {"css": "a", "attr": "href"}}
+        fields.update(extra.pop("fields", {}))
+        extra.setdefault("css", "li.row")
+        return items(fields=fields, **extra)
+
+    def test_without_require_every_row_survives(self):
+        rows, skipped = read_rows(self.spec(), self.document(), required=("url",))
+        assert len(rows) == 3
+        assert skipped == 0
+
+    def test_a_rejected_row_is_dropped_and_counted(self):
+        # A child category has a non-zero parent, and only the parent field says so.
+        spec = self.spec(
+            fields={
+                # No css: the attribute is on the row container itself, and a selector would
+                # search inside it.
+                "parent": {
+                    "attr": "data-parent",
+                    "pipe": [{"reject": {"pattern": "^[1-9]"}}],
+                }
+            },
+            require=["parent"],
+        )
+        rows, skipped = read_rows(spec, self.document(), required=("url",))
+        assert [row.get("title") for row in rows] == ["Alpha", "Gamma"]
+        assert skipped == 1
+
+    def test_regex_keeps_only_matching_rows(self):
+        spec = self.spec(
+            fields={"keep": {"css": "a", "pipe": [{"regex": {"pattern": "^Ga"}}]}},
+            require=["keep"],
+        )
+        rows, _ = read_rows(spec, self.document(), required=("url",))
+        assert [row.get("title") for row in rows] == ["Gamma"]
+
+    def test_it_adds_to_rather_than_replaces_what_the_stage_requires(self):
+        # A row with no url still goes, whatever `require` says.
+        spec = self.spec(
+            fields={"keep": {"const": "yes"}},
+            css="li.row, nav a",
+            require=["keep"],
+        )
+        rows, _ = read_rows(spec, self.document(), required=("url",))
+        assert len(rows) == 3

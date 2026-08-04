@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lncrawl-sourcelib"
-version = "0.1.4"
+version = "0.1.5"
 description = "Interpreter for declarative light-novel source definitions, as defined by RFC-0001."
 readme = "README.md"
 license = { file = "LICENSE" }

@@ -289,3 +289,31 @@ class TestRoundTrip:
         assert not Paginate.model_validate(
             {"last": {"css": "b"}, "url": "u", "concurrent": False}
         ).runs_concurrently
+
+
+class TestPaginateStep:
+    def test_it_defaults_to_one(self):
+        assert Paginate.model_validate({"last": 3, "url": "https://e/p={page}"}).step == 1
+
+    def test_zero_is_refused(self):
+        # A step of zero would address the same page forever.
+        with pytest.raises(ValidationError):
+            Paginate.model_validate({"while": "has_items", "step": 0, "url": "https://e/{page}"})
+
+    def test_a_negative_step_is_refused(self):
+        with pytest.raises(ValidationError):
+            Paginate.model_validate({"while": "has_items", "step": -5, "url": "https://e/{page}"})
+
+    def test_a_page_size_is_a_valid_step(self):
+        paginate = Paginate.model_validate(
+            {"while": "has_items", "step": 100, "url": "https://e/?start={page}"}
+        )
+        assert paginate.step == 100
+
+    def test_it_does_not_prevent_concurrency(self):
+        # Every address is computable up front whatever the stride, so a strided walk parallelises
+        # exactly as a page-numbered one does.
+        paginate = Paginate.model_validate(
+            {"last": 500, "step": 100, "url": "https://e/?start={page}"}
+        )
+        assert paginate.runs_concurrently is True

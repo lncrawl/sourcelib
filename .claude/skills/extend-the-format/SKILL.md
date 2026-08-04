@@ -20,13 +20,16 @@ design it removed `requires`, a login stage, `of`/`join`, a separate `attrs` fie
 index.
 
 Until something clears that bar, the answer is a hook. Record the count when you decline, so the
-evidence accumulates instead of being re-derived. Two gaps are open on exactly this basis: row
-filtering by a sibling field, and paging by item offset rather than page number.
+evidence accumulates instead of being re-derived.
 
-The second one shows how the counting pays off. It started as "offset pagination" across 26 hosts,
-which sounded like one gap; separating the shapes showed that 18 of those were simply numbered from
-zero, which `paginate.first` now covers, leaving 8 that genuinely page by item offset. A vague count
-would have argued for a vague feature.
+Counting the *shapes* separately rather than the symptom is what makes the rule work. "Offset
+pagination" looked like one gap across 26 hosts. Separating them showed 18 were merely numbered from
+zero, which `paginate.first` covers; 7 paged by an offset that advances by what arrived, now
+`paginate.by: items`; and 1 asked for a start-and-end range over a known total, which is a third
+mechanism and stayed a hook at one host. One vague count would have argued for one vague feature.
+
+The residue is what to check a new request against: a start-and-end range (1 host), and interpolating
+a var into a step argument, which is what still keeps the Blogger hook from disappearing entirely.
 
 Three rules hold the line and none is negotiable for convenience:
 
@@ -39,14 +42,18 @@ Three rules hold the line and none is negotiable for convenience:
 
 ## A grammar version covers three things at once
 
-`spec: 1` versions **the model, the step registry and the hook point set together**. Adding a step is a
-version bump exactly like adding a field.
+`spec: 1` versions **the model, the step registry and the hook point set together**.
 
-Miss that and the failure is nasty: a spec using a new step is still schema-valid, so an old
-interpreter accepts the document and dies on an unknown step name mid-crawl, per chapter, with nothing
-pointing at the cause. Two rules close it, and both are implemented: any registry or hook-point
-addition bumps `spec`, and an unrecognised step or hook name is a **load-time** validation error
-naming the step.
+**What forces a bump is meaning, not addition.** Change what an existing key, step or point *does* and
+`spec` moves: an old interpreter recognises every name and quietly does the wrong thing. Add a new key
+or step and it does not, on one condition that is load-bearing and implemented: an unrecognised key,
+step or hook name is a **load-time** error naming it. `extra="forbid"` gives that for keys and
+`_check_pipes` gives it for steps.
+
+Do not "improve" this by requiring a bump for additions. It was the original rule and it was wrong in
+practice: a spec naming the new key would declare a version an old client skips wholesale, and a *base*
+doing so takes every spec extending it out of service at the same time. Loud refusal at load is the
+better trade, and it is the failure the rule was written to prevent in the first place.
 
 A later grammar arrives as a new RFC document, not as edits to this one. `spec:` exists so both can be
 live at once.
@@ -56,7 +63,9 @@ live at once.
 In `transform.py`, the lowest layer: it imports nothing of ours, so a step cannot reach the model.
 
 - **Declare what it consumes and produces.** The registry entry is what lets a pipe whose types do not
-  connect be rejected at validation time rather than mid-crawl.
+  connect, or one naming a step that does not exist, be rejected at load time rather than mid-crawl.
+  `_check_pipes` in `spec/checks.py` is what calls the registry; `validate_pipe` sat exported, tested
+  and uncalled for four releases, so a misspelled step passed validation and raised per chapter.
 - **Decide whether it is a filter or a cleanup, and get it right.** A filter yields nothing when it
   does not match; a cleanup yields its input unchanged. Backwards, a step deletes rows while the crawl
   reports success. `FILTERS` is the list and section 6.2 is the reason it exists.
@@ -75,9 +84,10 @@ and never called, so a spec author bound one, passed validation and got silence.
 `tests/test_hooked_crawl.py` is parametrised over `hook_points()` for this reason. **Adding a stage
 field adds points, so run that test and confirm the new ones fire.**
 
-Two points, `check_response` and `login`, are specified and deliberately not yet wired: they belong to
-the session rather than to a crawl, and `check_response` needs the fetcher protocol to carry it.
-`SESSION_HOOK_POINTS` names them and the reachability test excludes them.
+`check_response` and `login` are the two points that belong to the session rather than to a stage, named
+by `SESSION_HOOK_POINTS`. They are wired by `SessionFetcher` wrapping the fetcher, not by widening the
+`Fetcher` protocol, so an implementation of that protocol does not grow a parameter it never uses. The
+reachability test covers all seventeen points now, session ones included.
 
 ## After the change
 

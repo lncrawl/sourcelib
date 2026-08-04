@@ -14,9 +14,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import Any, Callable, Collection, Dict, List, Mapping, Optional, Tuple, Union
 
-from sourcelib.fetch import Fetcher, run_request, walk_pages
+from sourcelib.fetch import Fetcher, FetchError, run_request, walk_pages
 from sourcelib.hooks import Context, HookRegistry
 from sourcelib.interpolate import render_url
 from sourcelib.models import Chapter, Novel, SearchResult, Volume
@@ -25,7 +26,7 @@ from sourcelib.spec.items import Row, assign_volumes, group_by_size, read_rows, 
 from sourcelib.spec.model import Extractor, ItemList, SourceSpec
 from sourcelib.vars import VarCache
 
-__all__ = ["CrawlError", "Interpreter", "Report"]
+__all__ = ["CrawlError", "Interpreter", "Report", "SessionFetcher"]
 
 #: Which default pipe each named field takes (section 6.4).
 _KINDS = {
@@ -82,6 +83,61 @@ class Report:
         self.warnings.append(message)
 
 
+class SessionFetcher:
+    """A Fetcher that authenticates once and diagnoses every response, per RFC-0001 section 7.2.
+
+    A wrapper rather than a change to the `Fetcher` protocol. Both points belong to the session
+    and not to a stage, so there is no field for either to replace, and every implementation of
+    the protocol would otherwise have to grow a parameter it does not use.
+
+    `login` runs once, behind a lock, before the first request: chapter bodies are fetched
+    concurrently, so without one an unauthenticated crawl would send as many logins as it has
+    threads. `check_response` raises `FetchError` rather than a crawl error, because a refusal is
+    exactly what a `from` alternative should be allowed to lose to.
+    """
+
+    def __init__(
+        self,
+        inner: Fetcher,
+        check: Optional[Callable[[Any, Any], Any]] = None,
+        login: Optional[Callable[[Any], Any]] = None,
+        ctx: Any = None,
+    ) -> None:
+        self._inner = inner
+        self._check = check
+        self._login = login
+        self._ctx = ctx
+        self._logged_in = login is None
+        self._lock = Lock()
+
+    def fetch(self, method: str, url: str, **kwargs: Any) -> Any:
+        self._authenticate()
+        return self._diagnose(self._inner.fetch(method, url, **kwargs), url)
+
+    def render(self, url: str, *, wait_for: Optional[str] = None) -> Any:
+        self._authenticate()
+        return self._diagnose(self._inner.render(url, wait_for=wait_for), url)
+
+    def _authenticate(self) -> None:
+        if self._logged_in:
+            return
+        with self._lock:
+            if self._logged_in or self._login is None:
+                return
+            self._login(self._ctx)
+            self._logged_in = True
+
+    def _diagnose(self, response: Any, url: str) -> Any:
+        if self._check is None:
+            return response
+        # Anything truthy is a diagnosis. Returning nothing is how a hook says "this is a page",
+        # which keeps the common case a bare `return` rather than a sentinel.
+        verdict = self._check(response, self._ctx)
+        if verdict:
+            raise FetchError(f"{url} was refused: {verdict}")
+        return response
+
+
 class Interpreter:
     """Crawls one host with one resolved spec.
 
@@ -102,15 +158,30 @@ class Interpreter:
         #: pages prove the pagination works, while a `while` or `next` walk is sequential by
         #: nature and a long list is hundreds of requests before the first chapter is read.
         self.toc_pages = toc_pages
-        self.fetcher = fetcher
         self.report = report or Report()
         self.origin = _origin_of(spec)
         self.documents: Dict[str, Document] = {}
+        self.fetcher = fetcher
         self.vars = VarCache(spec.vars, self.origin, self._fetch_for_var)
         self.hooks = dict(hooks or {})
         # One Context per crawl, passed into every hook call. Never ambient: a hook module is
         # shared by every crawl, so only an argument can say which crawl it is serving.
+        #
+        # `ctx.session` is the unwrapped fetcher on purpose. A `check_response` hook that makes
+        # its own request would otherwise be diagnosed by itself, and a hook reaching past the
+        # declarative fields is already responsible for what it gets back.
         self.ctx = Context(fetcher, spec, self.vars.as_mapping())
+        # Wrapped last, so `ctx` exists to pass to either hook. `_fetch_for_var` reads
+        # `self.fetcher` when it runs rather than when it was bound, so a var's own request is
+        # diagnosed as well.
+        self.fetcher = self._session_fetcher(fetcher)
+
+    def _session_fetcher(self, fetcher: Fetcher) -> Fetcher:
+        check, check_ctx = self._hook("check_response")
+        login, login_ctx = self._hook("login")
+        if check is None and login is None:
+            return fetcher
+        return SessionFetcher(fetcher, check, login, check_ctx or login_ctx)
 
     @classmethod
     def load(
@@ -197,8 +268,11 @@ class Interpreter:
         if stage is None or stage.request is None:
             return []
 
+        def count_items(document: Document) -> int:
+            return len(self._rows(stage, document, ("url",))[0])
+
         def has_items(document: Document) -> bool:
-            return bool(self._rows(stage, document, ("url",))[0])
+            return count_items(document) > 0
 
         document = self._run("search", stage.request, yields=has_items, query=query)
         pages, truncated = walk_pages(
@@ -206,7 +280,7 @@ class Interpreter:
             stage.request.paginate,
             self.fetcher,
             self.context(query=query),
-            has_items=has_items,
+            count_items=count_items,
             parser=self.spec.parser or DEFAULT_PARSER,
         )
         if truncated:
@@ -339,8 +413,11 @@ class Interpreter:
         chapter_list = stage.items
         request = stage.request or _get(url)
 
+        def count_items(document: Document) -> int:
+            return len(self._rows(chapter_list, document, ("url",))[0])
+
         def has_items(document: Document) -> bool:
-            return bool(self._rows(chapter_list, document, ("url",))[0])
+            return count_items(document) > 0
 
         # `from` means "until one yields items", so an alternative that answers 200 with an
         # empty body has to lose to the next one. Without the predicate the first alternative
@@ -351,7 +428,7 @@ class Interpreter:
             request.paginate,
             self.fetcher,
             self.context(novel_url=url),
-            has_items=has_items,
+            count_items=count_items,
             parser=self.spec.parser or DEFAULT_PARSER,
             limit=self.toc_pages,
         )

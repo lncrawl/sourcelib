@@ -218,3 +218,115 @@ class TestPageOrder:
             )
             == []
         )
+
+
+class TestPipesAreChecked:
+    """Section 6: a step a pipe names must exist, and consecutive steps must connect.
+
+    `validate_pipe` could always say both. Until this ran on a resolved spec, a misspelled
+    step passed validation and raised once per chapter mid-crawl.
+    """
+
+    def test_an_unknown_step_is_named_with_its_field(self):
+        found = problems(chapter={"body": {"css": "#content", "pipe": ["trimm"]}})
+        assert "chapter.body.pipe" in found
+
+    def test_a_pipe_whose_types_do_not_connect_is_refused(self):
+        found = problems(chapter={"body": {"css": "#content", "pipe": ["text", "unwrap_all"]}})
+        assert "chapter.body.pipe" in found
+
+    def test_a_valid_pipe_passes(self):
+        assert problems(chapter={"body": {"css": "#content", "pipe": ["paragraphs"]}}) == []
+
+    def test_a_pipe_inside_a_fallback_is_checked(self):
+        found = problems(
+            novel={"title": {"css": "h1", "fallback": [{"css": "h2", "pipe": ["nope"]}]}}
+        )
+        assert any(field.startswith("novel.title.fallback") for field in found)
+
+    def test_an_item_field_pipe_is_checked(self):
+        found = problems(
+            toc={
+                "request": {"page": "novel"},
+                "items": {"css": "a", "fields": {"title": {"pipe": ["nope"]}}},
+            }
+        )
+        assert any("items" in field for field in found)
+
+    def test_a_named_pipe_is_expanded_before_checking(self):
+        # The name is a reference, so the steps behind it are what has to connect.
+        found = problems(
+            pipes={"clean": ["trimm"]},
+            chapter={"body": {"css": "#content", "pipe": ["clean"]}},
+        )
+        assert "pipes.clean" in found
+
+    def test_a_named_pipe_that_is_valid_passes_through_a_reference(self):
+        assert (
+            problems(
+                pipes={"clean": [{"strip_tags": ["h3"]}, "paragraphs"]},
+                chapter={"body": {"css": "#content", "pipe": ["clean"]}},
+            )
+            == []
+        )
+
+    def test_a_step_appended_after_a_named_pipe_must_still_connect(self):
+        # This is how a child adds a step without respelling the base's pipe, so the join
+        # between the expansion and what follows is the part worth checking.
+        found = problems(
+            pipes={"clean": ["paragraphs"]},
+            chapter={"body": {"css": "#content", "pipe": ["clean", "unwrap_all"]}},
+        )
+        assert "chapter.body.pipe" in found
+
+    def test_a_pipe_naming_no_such_pipe_is_refused(self):
+        found = problems(chapter={"body": {"css": "#content", "pipe": "no_such_pipe"}})
+        assert "chapter.body.pipe" in found
+
+    def test_a_pipe_named_by_string_resolves(self):
+        assert (
+            problems(
+                pipes={"clean": ["paragraphs"]},
+                chapter={"body": {"css": "#content", "pipe": "clean"}},
+            )
+            == []
+        )
+
+
+class TestRequireNamesAField:
+    """A misspelled `require` would drop every row and look exactly like a dead selector."""
+
+    def test_an_undeclared_name_is_refused(self):
+        found = problems(
+            toc={
+                "request": {"page": "novel"},
+                "items": {"css": "a", "fields": {"url": {"attr": "href"}}, "require": ["parnet"]},
+            }
+        )
+        assert "toc.items.require" in found
+
+    def test_a_declared_name_passes(self):
+        assert (
+            problems(
+                toc={
+                    "request": {"page": "novel"},
+                    "items": {
+                        "css": "a",
+                        "fields": {"url": {"attr": "href"}, "parent": {"attr": "data-parent"}},
+                        "require": ["parent"],
+                    },
+                }
+            )
+            == []
+        )
+
+    def test_a_search_stage_is_checked_too(self):
+        found = problems(
+            search={
+                "request": {"get": "https://e/s?q={query}"},
+                "css": "a",
+                "fields": {"url": {"attr": "href"}},
+                "require": ["nope"],
+            }
+        )
+        assert "search.require" in found

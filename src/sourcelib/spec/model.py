@@ -154,9 +154,9 @@ class Extractor(Node):
 class Paginate(Node):
     """How a stage walks more than one page.
 
-    `first` and `last` are the numbers the *site* puts on its own pages, not a count of them. The
-    stage's own request already produced `first`, so the pages fetched through `url` are the ones
-    after it, up to and including `last`.
+    `first`, `step` and `last` describe the sequence `{page}` takes, in the numbers the *site* uses
+    rather than as a count. The stage's own request already produced `first`, so the pages fetched
+    through `url` are the ones after it, up to and including `last`.
     """
 
     while_: Optional[Literal["has_items"]] = Field(
@@ -168,6 +168,13 @@ class Paginate(Node):
         default=1,
         description="The number this site gives its first page, which the stage's own request "
         "already fetched. Defaults to 1. Set 0 for a site numbering from zero.",
+    )
+    step: int = Field(
+        default=1,
+        ge=1,
+        description="How much '{page}' advances between pages. 1 for a site numbering pages. A "
+        "site addressing a page by the index of its first row sets this to the page size, so "
+        "'{page}' counts rows rather than pages.",
     )
     last: Optional[Union[int, Extractor]] = Field(
         default=None,
@@ -374,6 +381,12 @@ class ItemList(Node):
         description="Per-row Extractors, each evaluated with that row in scope. Extra "
         "keys are preserved on the item and readable later as {chapter.<key>}. A field "
         "may instead be a URL template referencing earlier siblings as {item.<name>}.",
+    )
+    require: List[str] = Field(
+        default_factory=list,
+        description="Extra field names a row cannot do without, beyond the one its stage "
+        "already requires. A row where any of them resolves empty is dropped, so a filter "
+        "step such as regex or reject in that field's pipe becomes a row-level condition.",
     )
 
 

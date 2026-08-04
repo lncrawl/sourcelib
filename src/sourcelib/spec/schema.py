@@ -30,6 +30,31 @@ def generator() -> str:
     return f"lncrawl-sourcelib=={__version__}"
 
 
+def _allow_deletion(schema: Dict[str, Any]) -> None:
+    """Let every property also be null, throughout the document.
+
+    The schema validates a *raw* document, and in one of those a null is not a value: it deletes
+    what an ancestor set. A child replacing an inherited `from` with a `page` has no other way to
+    say "not this", and the model never sees the null, because `extends` consumes deletions while
+    merging and only the resolved document is model-validated.
+
+    Without this, the one mechanism the format has for removing an inherited key was
+    unrepresentable in the schema for any field whose type was not already optional, so a correct
+    spec failed CI. `spec` is exempt: deleting the version a document declares is never meaningful.
+    """
+    for definition in [schema, *schema.get("$defs", {}).values()]:
+        properties = definition.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        for name, entry in properties.items():
+            if not isinstance(entry, dict) or name == "spec":
+                continue
+            if entry.get("type") == "null" or {"type": "null"} in entry.get("anyOf", []):
+                continue
+            kept = {k: entry.pop(k) for k in ("title", "description", "default") if k in entry}
+            properties[name] = {"anyOf": [entry, {"type": "null"}], **kept}
+
+
 def build() -> Dict[str, Any]:
     """The JSON Schema for one source definition."""
     schema = SourceSpec.model_json_schema(by_alias=True, mode="validation")
@@ -39,6 +64,7 @@ def build() -> Dict[str, Any]:
     schema["description"] = (
         "A declarative description of how to read one website, as defined by RFC-0001."
     )
+    _allow_deletion(schema)
     schema[GENERATOR_KEY] = generator()
     return schema
 

@@ -7,9 +7,12 @@ is merged. Running them earlier would reject the alias spec that ``extends`` exi
 
 from __future__ import annotations
 
-from typing import AbstractSet, Dict, List, Optional
+from typing import AbstractSet, Any, Dict, Iterator, List, Optional, Tuple
+
+from pydantic import BaseModel
 
 from sourcelib.spec.model import SourceSpec
+from sourcelib.transform import ANY, LIST, StepError, expand_pipe, validate_pipe
 
 __all__ = ["Problem", "check_resolved", "derived_capabilities"]
 
@@ -73,7 +76,107 @@ def check_resolved(spec: SourceSpec) -> List[Problem]:
     problems.extend(_check_addresses(spec))
     problems.extend(_check_claims(spec))
     problems.extend(_check_page_order(spec))
+    problems.extend(_check_pipes(spec))
+    problems.extend(_check_require(spec))
     return problems
+
+
+def _item_lists(spec: SourceSpec) -> Iterator[Tuple[str, Any]]:
+    for name in ("search", "toc"):
+        stage = getattr(spec, name, None)
+        if stage is None:
+            continue
+        if name == "search":
+            yield name, stage
+            continue
+        for part in ("items", "volumes"):
+            value = getattr(stage, part, None)
+            if value is not None:
+                yield f"{name}.{part}", value
+
+
+def _check_require(spec: SourceSpec) -> List[Problem]:
+    """A name in `require` must be a field the list declares.
+
+    A misspelling would otherwise read as a field that resolves empty on every row, which drops
+    the whole list. Reporting zero chapters is the same thing a dead selector does, so nothing
+    would point at the typo.
+    """
+    problems: List[Problem] = []
+    for where, item_list in _item_lists(spec):
+        declared = set(getattr(item_list, "fields", None) or ())
+        for name in getattr(item_list, "require", None) or ():
+            if name not in declared:
+                problems.append(
+                    Problem(
+                        f"{where}.require",
+                        f"{name!r} is not a declared field, so every row would be dropped",
+                    )
+                )
+    return problems
+
+
+def _pipes_in(node: Any, path: str) -> Iterator[Tuple[str, Any, str]]:
+    """Every declared pipe in *node*, with the path to it and what it is handed.
+
+    The input kind matters: `all: true` hands the pipe a list, and a scalar step then maps over it
+    and yields a list again. Assuming a scalar start instead rejects `[trim, drop_empty, join]`,
+    which is what half the live bases do with a multi-valued field.
+    """
+    if isinstance(node, BaseModel):
+        fields = type(node).model_fields
+        for name in fields:
+            value = getattr(node, name, None)
+            if value is None:
+                continue
+            shown = fields[name].alias or name
+            where = f"{path}.{shown}" if path else shown
+            if name == "pipe":
+                yield where, value, LIST if getattr(node, "all", False) else ANY
+            else:
+                yield from _pipes_in(value, where)
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            yield from _pipes_in(value, f"{path}.{key}" if path else str(key))
+    elif isinstance(node, (list, tuple)):
+        for index, value in enumerate(node):
+            yield from _pipes_in(value, f"{path}[{index}]")
+
+
+def _check_pipes(spec: SourceSpec) -> List[Problem]:
+    """Section 6: every step a pipe names must exist, and consecutive steps must connect.
+
+    The registry already knows what each step consumes and produces, and `validate_pipe` has
+    always been able to say so. Nothing called it on a spec, so a misspelled step passed
+    validation and failed once per chapter mid-crawl, naming the step but not the file.
+
+    The input kind comes from `all`, which is the one thing about it a spec states plainly. What
+    an extractor hands a scalar pipe depends on `attr` and on section 3.4's node-preserving rule,
+    so that case stays unasserted and the checking effectively begins at the second step.
+    """
+    problems: List[Problem] = []
+    declared = spec.pipes or {}
+
+    for name, steps in declared.items():
+        # A named pipe is checked from an unknown input, since any field may reference it.
+        problems.extend(_check_one_pipe(f"pipes.{name}", steps, declared, ANY))
+    for where, steps, takes in _pipes_in(spec, ""):
+        problems.extend(_check_one_pipe(where, steps, declared, takes))
+    return problems
+
+
+def _check_one_pipe(
+    where: str, steps: Any, declared: Dict[str, Any], takes: str = ANY
+) -> List[Problem]:
+    if isinstance(steps, str):
+        if steps not in declared:
+            return [Problem(where, f"names no pipe in 'pipes': {steps!r}")]
+        steps = [steps]
+    try:
+        validate_pipe(expand_pipe(steps, declared), takes)
+    except StepError as error:
+        return [Problem(where, str(error))]
+    return []
 
 
 #: The order stages run in (section 3.6), which is what makes a `page` reference resolvable.

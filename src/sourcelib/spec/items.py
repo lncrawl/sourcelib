@@ -69,8 +69,12 @@ def read_rows(
 
     *required* names the fields an item cannot do without. A row missing one disappears, which
     is how navigation links and a "latest chapters" panel stay out of a chapter list.
+
+    `require` on the list adds to that, which is how a row is rejected on a field its stage does
+    not need: the field's own pipe decides, since a filter step yields nothing when it rejects.
     """
     kinds = dict(kinds or {})
+    needed = (*required, *item_list.require)
     rows: List[Row] = []
     skipped = 0
 
@@ -84,7 +88,7 @@ def read_rows(
                 spec, document, scope, json_scope, name, kinds, pipes, fields
             )
 
-        if any(_is_blank(fields.get(name)) for name in required):
+        if any(_is_blank(fields.get(name)) for name in needed):
             skipped += 1
             continue
 

@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 
 from sourcelib.spec.extract import DEFAULT_PARSER
 from sourcelib.transform import (
+    FILTERS,
     REGISTRY,
     StepError,
     apply_pipe,
@@ -451,3 +452,68 @@ class TestMinAndMax:
     def test_they_compare_numerically_not_as_text(self, step):
         picked = apply_step(["9", "10"], step)
         assert picked == ("10" if step == "max" else "9")
+
+
+class TestStripMatching:
+    """Removing an element by what it says, per RFC-0001 section 6.
+
+    A translator's note, a watermark and a "read this at ..." line all sit in ordinary markup, so
+    only the words identify them. 37 sources in the Python corpus needed this.
+    """
+
+    BODY = (
+        '<div id="c">'
+        "<p>Real first line.</p>"
+        "<p>Translator: Qii</p>"
+        "<p>Real second line.</p>"
+        "<h4>Chapter 12</h4>"
+        "<p>Read only at example.com</p>"
+        "</div>"
+    )
+
+    def body(self):
+        found = BeautifulSoup(self.BODY, "lxml").select_one("#c")
+        assert found is not None
+        return found
+
+    def test_it_removes_a_matching_leaf(self):
+        out = apply_step(self.body(), {"strip_matching": {"pattern": "^Translator:"}})
+        assert "Translator" not in out.get_text()
+        assert "Real first line." in out.get_text()
+
+    def test_it_keeps_everything_else(self):
+        out = apply_step(self.body(), {"strip_matching": {"pattern": "^Translator:"}})
+        assert out.get_text().count("Real") == 2
+
+    def test_it_never_removes_the_container(self):
+        # The failure that matters: every ancestor of a match also contains the matching text, so
+        # an unrestricted search would delete the whole chapter and still report success.
+        out = apply_step(self.body(), {"strip_matching": {"pattern": "Real first"}})
+        assert out.name == "div"
+        assert "Real second line." in out.get_text()
+
+    def test_tags_restrict_which_elements_are_considered(self):
+        out = apply_step(
+            self.body(), {"strip_matching": {"pattern": r"Chapter \d+", "tags": ["h4"]}}
+        )
+        assert "Chapter 12" not in out.get_text()
+        assert out.get_text().count("Real") == 2
+
+    def test_a_tag_that_does_not_match_the_pattern_survives(self):
+        out = apply_step(self.body(), {"strip_matching": {"pattern": "^nope$", "tags": ["p"]}})
+        assert out.get_text().count("Real") == 2
+
+    def test_no_pattern_changes_nothing(self):
+        # Section 6.2: a cleanup with nothing to do yields its input unchanged.
+        before = self.body().get_text()
+        assert apply_step(self.body(), "strip_matching").get_text() == before
+
+    def test_it_matches_anywhere_in_the_text(self):
+        out = apply_step(self.body(), {"strip_matching": {"pattern": "only at example"}})
+        assert "example.com" not in out.get_text()
+
+    def test_the_step_is_in_the_registry_as_a_cleanup(self):
+        # A filter yields nothing when it does not match; this yields its input, so it must not
+        # be listed as a filter or rows would vanish.
+        assert "strip_matching" in REGISTRY
+        assert "strip_matching" not in FILTERS

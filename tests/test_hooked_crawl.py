@@ -294,11 +294,6 @@ class TestEveryPointIsReachable:
     covered without anyone remembering to cover it.
     """
 
-    #: Points belonging to the session rather than to a crawl. `check_response` is the fetcher's
-    #: to call on every response and `login` is the application's to invoke; neither is reached
-    #: by reading a novel, so this test cannot speak for them.
-    SESSION = frozenset(SESSION_HOOK_POINTS)
-
     SPEC = {
         "spec": 1,
         "base_url": "https://e.test/",
@@ -348,11 +343,15 @@ class TestEveryPointIsReachable:
                 return Document.from_html(markup, url="https://e.test/n/x")
             if point == "chapter.url":
                 return "https://e.test/c/1"
+            if point in SESSION_HOOK_POINTS:
+                # `check_response` reads a truthy return as a refusal and `login` returns
+                # nothing, so for both of them "no news" is the answer that lets a crawl finish.
+                return None
             return args[0] if args else None
 
         return hook
 
-    @pytest.mark.parametrize("point", sorted(set(hook_points()) - frozenset(SESSION_HOOK_POINTS)))
+    @pytest.mark.parametrize("point", sorted(hook_points()))
     def test_the_point_is_called(self, point):
         called: list = []
         site = RecordedFetcher(
@@ -372,3 +371,79 @@ class TestEveryPointIsReachable:
         interpreter.download_chapter(novel, novel.chapters[0])
 
         assert called == [point] or point in called, f"{point} is bindable but never called"
+
+
+class TestSessionPoints:
+    """`check_response` and `login`, per RFC-0001 section 7.2.
+
+    Both were specified, bindable and called by nothing. They belong to the session rather than
+    to a stage, so they are wired by wrapping the fetcher instead of by growing its protocol.
+    """
+
+    SPEC = {
+        "spec": 1,
+        "base_url": "https://e.test/",
+        "novel": {"title": {"css": "h1"}},
+        "toc": {
+            "request": {"page": "novel"},
+            "items": {"css": "li a", "fields": {"title": {}, "url": {"attr": "href"}}},
+        },
+        "chapter": {"body": {"css": "#c"}},
+    }
+    NOVEL = '<html><body><h1>T</h1><ul><li><a href="/c/1">Ch 1</a></li></ul></body></html>'
+    CHAPTER = '<html><body><div id="c"><p>hi</p></div></body></html>'
+
+    def interpreter(self, hooks):
+        site = RecordedFetcher(
+            {"https://e.test/n/x": self.NOVEL, "https://e.test/c/1": self.CHAPTER}
+        )
+        spec = SourceSpec.model_validate(self.SPEC)
+        return Interpreter(spec, site, hooks={p: (f, "probe") for p, f in hooks.items()}), site
+
+    def test_a_refusal_stops_the_crawl_and_names_the_url(self):
+        def check(response, ctx):
+            return "challenge page" if "n/x" in getattr(response, "url", "") else None
+
+        interpreter, _ = self.interpreter({"check_response": check})
+        with pytest.raises(Exception, match="was refused: challenge page"):
+            interpreter.read_novel("https://e.test/n/x")
+
+    def test_returning_nothing_lets_the_response_through(self):
+        seen = []
+
+        def check(response, ctx):
+            seen.append(getattr(response, "url", ""))
+            return None
+
+        interpreter, _ = self.interpreter({"check_response": check})
+        novel = interpreter.read_novel("https://e.test/n/x")
+        assert novel.title == "T"
+        assert seen
+
+    def test_login_runs_once_however_many_requests_follow(self):
+        calls = []
+
+        interpreter, _ = self.interpreter({"login": lambda ctx: calls.append(1)})
+        novel = interpreter.read_novel("https://e.test/n/x")
+        interpreter.download_chapter(novel, novel.chapters[0])
+        assert calls == [1]
+
+    def test_login_runs_before_the_first_request(self):
+        order = []
+
+        def login(ctx):
+            order.append("login")
+
+        def check(response, ctx):
+            order.append("response")
+            return None
+
+        interpreter, _ = self.interpreter({"login": login, "check_response": check})
+        interpreter.read_novel("https://e.test/n/x")
+        assert order[0] == "login"
+
+    def test_an_unhooked_spec_keeps_its_own_fetcher(self):
+        # No wrapper at all when neither point is bound, so nothing pays for a feature it
+        # does not use.
+        interpreter, site = self.interpreter({})
+        assert interpreter.fetcher is site

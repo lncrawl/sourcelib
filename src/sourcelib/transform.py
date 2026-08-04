@@ -31,6 +31,7 @@ __all__ = [
     "StepSpec",
     "apply_pipe",
     "apply_step",
+    "expand_pipe",
     "parse_step",
     "validate_pipe",
 ]
@@ -168,6 +169,35 @@ def _strip_css(node: Any, selectors: Any) -> Tag:
     tag = _as_tag(node)
     for selector in _names(selectors):
         for found in tag.select(selector):
+            found.decompose()
+    return tag
+
+
+def _strip_matching(
+    node: Any,
+    pattern: str = "",
+    tags: Any = None,
+) -> Tag:
+    """Remove elements whose own text matches *pattern*.
+
+    This is what a translator's note, a watermark and a "read this at ..." line have in common:
+    the markup around them is ordinary, so only the words identify them.
+
+    Restricted to elements with no element children unless *tags* names some. Every ancestor of a
+    match also contains the matching text, so an unrestricted search would find the chapter body
+    itself and delete the chapter while reporting success. Naming tags is the way to reach a
+    container deliberately.
+    """
+    tag = _as_tag(node)
+    if not pattern:
+        return tag
+    wanted = re.compile(pattern)
+    names = _names(tags) if tags else None
+
+    for found in tag.find_all(list(names) if names else True):
+        if names is None and found.find(True) is not None:
+            continue
+        if wanted.search(found.get_text()):
             found.decompose()
     return tag
 
@@ -531,6 +561,7 @@ REGISTRY: Dict[str, StepSpec] = dict(
     [
         _entry("strip_tags", NODE, NODE, _strip_tags),
         _entry("strip_css", NODE, NODE, _strip_css),
+        _entry("strip_matching", NODE, NODE, _strip_matching),
         _entry("unwrap", NODE, NODE, _unwrap),
         _entry("unwrap_all", NODE, NODE, _unwrap_all),
         _entry("keep_attrs", NODE, NODE, _keep_attrs),
@@ -639,9 +670,19 @@ def _invoke(spec: StepSpec, value: Any, argument: Any) -> Any:
 def apply_pipe(value: Any, steps: Sequence[Any], pipes: Optional[Dict[str, Any]] = None) -> Any:
     """Apply *steps* in order. A step naming an entry in *pipes* expands into it."""
     current = value
-    for declared in _expand(steps, pipes or {}):
+    for declared in expand_pipe(steps, pipes or {}):
         current = apply_step(current, declared)
     return current
+
+
+def expand_pipe(steps: Sequence[Any], pipes: Optional[Dict[str, Any]] = None) -> List[Any]:
+    """Resolve every named-pipe reference in *steps* into the steps it stands for.
+
+    Public because validation has to see the same expansion the run will, and it happens
+    before any value exists. A name is only a reference when *pipes* holds it, so a step
+    name is never shadowed by an absent entry.
+    """
+    return _expand(steps, pipes or {})
 
 
 def _expand(
