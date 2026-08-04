@@ -13,9 +13,11 @@ sources.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Collection, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Callable, Collection, Dict, List, Mapping, Optional, Tuple
 
 from sourcelib.fetch import Fetcher, run_request, walk_pages
+from sourcelib.hooks import Context, HookRegistry
 from sourcelib.interpolate import render
 from sourcelib.models import Chapter, Novel, SearchResult, Volume
 from sourcelib.spec.extract import Document, extract
@@ -92,6 +94,7 @@ class Interpreter:
         spec: SourceSpec,
         fetcher: Fetcher,
         report: Optional[Report] = None,
+        hooks: Optional[Mapping[str, Tuple[Callable[..., Any], str]]] = None,
     ) -> None:
         self.spec = spec
         self.fetcher = fetcher
@@ -99,6 +102,39 @@ class Interpreter:
         self.origin = _origin_of(spec)
         self.documents: Dict[str, Document] = {}
         self.vars = VarCache(spec.vars, self.origin, self._fetch_for_var)
+        self.hooks = dict(hooks or {})
+        # One Context per crawl, passed into every hook call. Never ambient: a hook module is
+        # shared by every crawl, so only an argument can say which crawl it is serving.
+        self.ctx = Context(fetcher, spec, self.vars.as_mapping())
+
+    @classmethod
+    def load(
+        cls,
+        spec: SourceSpec,
+        fetcher: Fetcher,
+        root: Optional[Path] = None,
+        report: Optional[Report] = None,
+    ) -> "Interpreter":
+        """Build an interpreter, binding the spec's hooks from *root*."""
+        bound = HookRegistry(root).bind(spec.hooks) if (root and spec.hooks) else {}
+        return cls(spec, fetcher, report, bound)
+
+    # -- hooks ------------------------------------------------------------------------- #
+
+    def _hook(self, point: str):
+        """The function bound to *point*, and a context labelled with its owner."""
+        entry = self.hooks.get(point)
+        if entry is None:
+            return None, None
+        function, owner = entry
+        return function, self.ctx.for_owner(owner)
+
+    def _hooked(self, point: str, value: Any, document: Optional[Document]) -> Any:
+        """Run a transform-shaped hook, or return *value* unchanged when none is bound."""
+        function, ctx = self._hook(point)
+        if function is None:
+            return value
+        return function(value, document, ctx)
 
     # -- context ---------------------------------------------------------------------- #
 
@@ -119,17 +155,23 @@ class Interpreter:
         )
 
     def _run(self, stage: str, request: Any, default_url: Optional[str] = None, **ctx: Any):
-        document = run_request(
-            request,
-            self.fetcher,
-            self.context(**ctx),
-            cache=self.documents,
-            default_url=default_url,
-            parser=self.spec.parser or "html.parser",
-            spec_headers=self.spec.headers,
-            spec_encoding=self.spec.encoding,
-            yields=None,
-        )
+        function, hook_ctx = self._hook(f"{stage}.request")
+        if function is not None:
+            # A request hook replaces the whole fetch, which is how a site speaking a protocol
+            # nothing here models still produces a document.
+            document = function(default_url or "", hook_ctx)
+        else:
+            document = run_request(
+                request,
+                self.fetcher,
+                self.context(**ctx),
+                cache=self.documents,
+                default_url=default_url,
+                parser=self.spec.parser or "html.parser",
+                spec_headers=self.spec.headers,
+                spec_encoding=self.spec.encoding,
+                yields=None,
+            )
         self.documents[stage] = document
         self.vars.offer(stage, document)
         return document
@@ -203,7 +245,14 @@ class Interpreter:
         return novel
 
     def _field(self, stage: Any, name: str, document: Document) -> Any:
-        """One novel field, falling back to standard page metadata when the spec is silent."""
+        """One novel field, falling back to standard page metadata when the spec is silent.
+
+        A hook bound to this field runs last, over whatever the spec or the metadata produced.
+        """
+        value = self._read_field(stage, name, document)
+        return self._hooked(f"novel.{name}", value, document)
+
+    def _read_field(self, stage: Any, name: str, document: Document) -> Any:
         declared = getattr(stage, name, None) if stage else None
         if declared is not None:
             value = extract(declared, document, kind=_KINDS.get(name), pipes=self.spec.pipes)
@@ -248,6 +297,9 @@ class Interpreter:
 
     def _read_toc(self, novel: Novel, url: str) -> None:
         stage = self.spec.toc
+        hooked_items, _ = self._hook("toc.items")
+        if hooked_items is not None:
+            return self._hooked_toc(novel, url, stage)
         if stage is None or stage.items is None:
             raise CrawlError("toc.items", "a novel needs a chapter list")
 
@@ -321,12 +373,58 @@ class Interpreter:
             item_list, document, required=required, kinds=_KINDS, pipes=self.spec.pipes
         )
 
+    def _hooked_toc(self, novel: Novel, url: str, stage: Any) -> None:
+        """A table of contents a hook produces, for a site whose list is not a document.
+
+        The hook returns rows as mappings. Volume grouping still applies, so a hook-driven list
+        can carry its own `volume` on each row or fall back to `chapters_per_volume`.
+        """
+        request = (stage.request if stage else None) or _get(url)
+        document = self._run("toc", request, default_url=url, novel_url=url)
+        function, ctx = self._hook("toc.items")
+        produced = function([], document, ctx) if function else []
+
+        rows = [Row(dict(entry)) for entry in produced or []]
+        if not rows:
+            raise CrawlError("toc.items", "the hook produced no chapters")
+
+        titles = self._hooked_volumes(document, rows)
+        if not titles:
+            group_by_size(rows, self.spec.chapters_per_volume)
+
+        seen: Dict[int, Volume] = {}
+        for index, row in enumerate(rows, start=1):
+            number = _as_int(row.get("volume")) or 1
+            if number not in seen:
+                seen[number] = Volume(id=number, title=titles.get(number, ""))
+            novel.chapters.append(
+                Chapter(
+                    id=index,
+                    url=_text(row.get("url")),
+                    title=_text(row.get("title")) or f"Chapter {index}",
+                    volume=number,
+                    extras=_extras(row, ("title", "url", "volume")),
+                )
+            )
+        novel.volumes = [seen[key] for key in sorted(seen)]
+
+    def _hooked_volumes(self, document: Document, rows: List[Row]) -> Dict[int, str]:
+        """Volumes a hook supplies, which a hook-driven list previously could not express."""
+        function, ctx = self._hook("toc.volumes")
+        if function is None:
+            return {}
+        produced = function([], document, ctx) or []
+        return {
+            number: str(entry.get("title", "")) for number, entry in enumerate(produced, start=1)
+        }
+
     # -- chapter ---------------------------------------------------------------------- #
 
     def download_chapter(self, novel: Novel, chapter: Chapter) -> Chapter:
         """Fill in *chapter*'s body."""
         stage = self.spec.chapter
-        if stage is None or stage.body is None:
+        body_hook, _ = self._hook("chapter.body")
+        if stage is None or (stage.body is None and body_hook is None):
             raise CrawlError("chapter.body", "a chapter needs a body")
 
         url = self._chapter_url(stage, chapter, novel)
@@ -355,9 +453,16 @@ class Interpreter:
         if truncated:
             self.report.truncated.append(f"chapter {chapter.id}")
 
-        parts = [
-            _text(extract(stage.body, page, kind="body", pipes=self.spec.pipes)) for page in pages
-        ]
+        parts = []
+        for page in pages:
+            raw = (
+                extract(stage.body, page, kind="body", pipes=self.spec.pipes)
+                if stage.body is not None
+                else None
+            )
+            # The hook runs per page, so a body split across pages is decrypted page by page.
+            parts.append(_text(self._hooked("chapter.body", raw, page)))
+
         chapter.body = stage.join.join(part for part in parts if part)
         chapter.success = bool(chapter.body)
         if not chapter.success:
