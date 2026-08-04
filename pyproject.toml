@@ -34,11 +34,9 @@ classifiers = [
 ]
 
 dependencies = [
+    "idna>=3.4",
     "pydantic>=2.7",
     "PyYAML>=6.0",
-    # RFC-0001 section 8.1 requires IDNA2008. Python's built-in codec is IDNA2003, which
-    # maps fass.example and faß.example to the same host, which are different hosts.
-    "idna>=3.4",
     "beautifulsoup4>=4.12",
 ]
 
@@ -53,6 +51,7 @@ sourcelib = "sourcelib.cli:main"
 [project.urls]
 Repository = "https://github.com/lncrawl/sourcelib"
 Issues = "https://github.com/lncrawl/sourcelib/issues"
+Changelog = "https://github.com/lncrawl/sourcelib/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sourcelib"]

@@ -1,0 +1,39 @@
+# Changelog
+
+All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.0] - 2026-08-04
+
+First release. Implements [RFC-0001](https://github.com/lncrawl/sources/blob/main/docs/0001-source-definition.md) at `spec: 1`.
+
+### Added
+
+- **The source definition model**, with the JSON Schema generated from it rather than maintained beside it. The schema records the version that produced it in `x-generator`, so the repository holding the specs regenerates with that exact version instead of whatever is latest.
+
+- **`extends` resolution.** Scalars replace, mappings merge, `fallback` lists prepend so a child's selector is tried first while everything the parent knew still follows, and every other list replaces because step order in a pipe is semantic. Cycles and chains past a depth limit are refused, as is an `extends` pointing into `disabled/`.
+
+- **The transform registry**, 28 typed steps, with a pipe whose types do not connect rejected at validation time rather than mid-crawl. A scalar step applied to a list runs element-wise, which is why the format needs no `map`.
+
+- **The extractor engine.** `css`, `json`, `regex`, `header` and `const`, evaluated in the order the RFC fixes: source, `all`, `attr`, `pipe`, `default`, then `fallback`. URL-valued fields resolve against the document they came from rather than against `base_url`, so a stage that paginated into a subdirectory still produces correct links.
+
+- **Requests and pagination.** All three termination conditions, `from` alternatives, form harvesting in both of its readings, and body-shape inference for a payload. Concurrent pages are assembled by page index rather than by completion order, because chapter numbering is what a consumer stores and compares.
+
+- **The interpreter**, turning a resolved spec into a novel, a table of contents with volumes, and chapter bodies joined across pages. A missing title or an empty chapter list is an error naming the field; a missing cover, author, tag list or synopsis is a warning, because real pages omit those often enough that failing would reject working sources.
+
+- **Hooks**, the only escape hatch. Bound by point name, loaded by path, and refused if they import from another host's implementation — checked from the syntax tree before the module executes, so a forbidden import cannot already have run. The context is passed as a parameter and never looked up ambiently: a hook module is shared by every crawl, so only an argument can say which one it is serving.
+
+- **`sourcelib try`**, which reports what every field produced and names the spec field, its file and its line when one fails. Structured output first and formatted second, and the exit status is the verdict, so an agent loop needs no output parsing. Chapters are sampled first, middle and last, since first-and-last alone would let a broken `join` through on a body split across pages.
+
+- **`sourcelib explain`**, a structural digest of a page at roughly 3% of its size: what repeats and how many rows, which script carries the data, and where a page count would come from. Classes that look build-generated are never offered as selectors, because a bundler hash breaks on the next deploy.
+
+- **`sourcelib record`** and offline replay, so CI can notice a change breaking a spec. Body lengths rather than bodies, since a fixture exists to catch a spec regression and not to fail on a one-word site edit.
+
+### Notes
+
+- **YAML is read as 1.2, not PyYAML's 1.1.** Under 1.1 `on: url` parses as a boolean key and a var silently loses its scope, so a document would read correctly in a JavaScript or Go parser and wrongly here.
+
+- **IDNA2008 is required, not the standard library's codec.** That one implements IDNA2003, which maps `faß.example` to `fass.example` — a different host rather than a different spelling of one.
+
+- **Fetching is an extra.** `pip install lncrawl-sourcelib` validates, resolves and transforms with no HTTP stack; `[fetch]` adds one. The definitions repository's CI and anyone only writing YAML should not need a TLS impersonation library.
+
+[0.1.0]: https://github.com/lncrawl/sourcelib/releases/tag/v0.1.0
