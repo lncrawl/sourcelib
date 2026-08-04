@@ -1,7 +1,10 @@
 """Command line entry point.
 
-Only the offline commands exist so far: resolving and validating documents, and emitting the
-JSON Schema. `try`, `explain` and `record` need the interpreter.
+`check`, `resolve` and `schema` are offline and need nothing but the repository. `try` and
+`explain` reach a site, so they import the HTTP layer lazily: a base install has no scraper, and
+validating a spec should not require one.
+
+`record`, for writing offline fixtures, is not built yet.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from typing import List, Optional, Sequence
 import yaml
 
 from sourcelib.spec.checks import check_resolved
+from sourcelib.spec.extract import Document
 from sourcelib.spec.loader import parse_yaml
 from sourcelib.spec.model import SourceSpec
 from sourcelib.spec.resolve import ResolveError, resolve_document
@@ -116,6 +120,23 @@ def _try(path: Path, url: str, root: Optional[Path], as_json: bool, sample: int)
     return 0 if trial.ok else 1
 
 
+def _explain(url: str, as_json: bool, render: bool) -> int:
+    from sourcelib.explain import explain, format_digest
+    from sourcelib.http import ScraperFetcher
+
+    with ScraperFetcher(origin=url) as fetcher:
+        response = fetcher.render(url) if render else fetcher.fetch("GET", url)
+
+    document = Document.from_html(response.text, url=response.url, headers=response.headers)
+    digest = explain(document)
+    print(
+        json.dumps(digest.to_dict(), indent=2, ensure_ascii=False)
+        if as_json
+        else format_digest(digest)
+    )
+    return 0
+
+
 def _schema(output: Optional[Path], check_only: bool) -> int:
     if output is None:
         print(render(), end="")
@@ -164,6 +185,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "a broken join across a multi-page body through",
     )
 
+    digest = sub.add_parser(
+        "explain", help="a structural digest of a page, for writing a spec against it"
+    )
+    digest.add_argument("url")
+    digest.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    digest.add_argument(
+        "--render", action="store_true", help="run the page's scripts first, for a JS shell"
+    )
+
     emit = sub.add_parser("schema", help="print or write the JSON Schema")
     emit.add_argument("-o", "--output", type=Path, help="write here instead of stdout")
     emit.add_argument(
@@ -180,6 +210,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _resolve(args.path, args.root, args.json)
     if args.command == "try":
         return _try(args.path, args.url, args.root, args.json, args.sample)
+    if args.command == "explain":
+        return _explain(args.url, args.json, args.render)
     if args.command == "schema":
         return _schema(args.output, args.check)
     return 1  # pragma: no cover - argparse rejects an unknown command first
