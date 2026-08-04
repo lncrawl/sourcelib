@@ -199,7 +199,8 @@ class Interpreter:
         results: List[SearchResult] = []
         for page in pages:
             rows, skipped = self._rows(stage, page, ("url",))
-            self.report.skipped["search"] = self.report.skipped.get("search", 0) + skipped
+            if skipped:
+                self.report.skipped["search"] = self.report.skipped.get("search", 0) + skipped
             for row in rows:
                 results.append(
                     SearchResult(
@@ -328,7 +329,8 @@ class Interpreter:
                 pipes=self.spec.pipes,
                 start=len(rows),
             )
-            self.report.skipped["toc"] = self.report.skipped.get("toc", 0) + skipped
+            if skipped:
+                self.report.skipped["toc"] = self.report.skipped.get("toc", 0) + skipped
             if stage.volumes is not None:
                 heading_rows, _ = read_rows(
                     stage.volumes, page, kinds=_KINDS, pipes=self.spec.pipes
@@ -466,7 +468,7 @@ class Interpreter:
         chapter.body = stage.join.join(part for part in parts if part)
         chapter.success = bool(chapter.body)
         if not chapter.success:
-            raise CrawlError("chapter.body", f"produced nothing for chapter {chapter.id}")
+            raise CrawlError("chapter.body", "produced nothing")
         return chapter
 
     def _chapter_url(self, stage: Any, chapter: Chapter, novel: Novel) -> str:

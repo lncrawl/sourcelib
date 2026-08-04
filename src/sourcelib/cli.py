@@ -94,6 +94,28 @@ def _resolve(path: Path, root: Optional[Path], as_json: bool) -> int:
     return 0
 
 
+def _try(path: Path, url: str, root: Optional[Path], as_json: bool, sample: int) -> int:
+    from sourcelib.http import ScraperFetcher
+    from sourcelib.trial import format_trial, run_trial
+
+    repo = _repo_root(root, [path])
+    origin = ""
+    try:
+        document = parse_yaml(path.read_text(encoding="utf-8"))
+        origin = str(document.get("base_url") or "")
+    except Exception:  # the trial itself reports a document that will not parse
+        pass
+
+    with ScraperFetcher(origin=origin) as fetcher:
+        trial = run_trial(path, url, fetcher, root=repo, sample=sample)
+
+    if as_json:
+        print(json.dumps(trial.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        print(format_trial(trial))
+    return 0 if trial.ok else 1
+
+
 def _schema(output: Optional[Path], check_only: bool) -> int:
     if output is None:
         print(render(), end="")
@@ -127,6 +149,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     resolve.add_argument("path", type=Path)
     resolve.add_argument("--json", action="store_true", help="emit JSON instead of YAML")
 
+    trial = sub.add_parser(
+        "try", parents=[rooted], help="run a spec against a live URL and report field by field"
+    )
+    trial.add_argument("path", type=Path)
+    trial.add_argument("url", help="a novel URL on that host")
+    trial.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    trial.add_argument(
+        "--sample",
+        type=int,
+        default=3,
+        metavar="N",
+        help="how many chapters to download: first, middle and last by default. Two would let "
+        "a broken join across a multi-page body through",
+    )
+
     emit = sub.add_parser("schema", help="print or write the JSON Schema")
     emit.add_argument("-o", "--output", type=Path, help="write here instead of stdout")
     emit.add_argument(
@@ -141,6 +178,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _check(args.paths, args.root, args.strict)
     if args.command == "resolve":
         return _resolve(args.path, args.root, args.json)
+    if args.command == "try":
+        return _try(args.path, args.url, args.root, args.json, args.sample)
     if args.command == "schema":
         return _schema(args.output, args.check)
     return 1  # pragma: no cover - argparse rejects an unknown command first
