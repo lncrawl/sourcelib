@@ -4,9 +4,14 @@ Interpreter for declarative light-novel source definitions.
 
 A source definition describes how to read one website as **data** rather than as code: one
 YAML document per host, validated against a published schema and interpreted at runtime.
-[RFC-0001](https://github.com/lncrawl/sources/blob/main/docs/0001-source-definition.md) in
-the `lncrawl/sources` repository is the normative definition of the format. This package is
-written against it, and where the two disagree the RFC wins.
+[RFC-0001](https://github.com/lncrawl/sourcelib/blob/main/docs/0001-source-definition.md)
+is the normative definition of the format, and it lives here: one grammar version covers the
+model, the step registry and the hook points together, so an errata and the code honouring it
+are a single change. Where this package and the RFC disagree, the RFC wins and the package has
+a bug.
+
+The definitions themselves live in [lncrawl/sources](https://github.com/lncrawl/sources), which
+also carries the guides for writing one.
 
 ```bash
 pip install lncrawl-sourcelib          # validate, resolve and transform

@@ -28,7 +28,7 @@ Both fixes come from the first run against a live site.
 
 ## [0.1.0] - 2026-08-04
 
-First release. Implements [RFC-0001](https://github.com/lncrawl/sources/blob/main/docs/0001-source-definition.md) at `spec: 1`.
+First release. Implements [RFC-0001](docs/0001-source-definition.md) at `spec: 1`.
 
 ### Added
 
