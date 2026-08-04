@@ -11,6 +11,7 @@ ours, which is what makes it the crawler's next core rather than a feature of it
 
 from importlib.metadata import PackageNotFoundError, version
 
+from sourcelib.registry import Entry, Registry, normalise_host
 from sourcelib.spec import (
     ChapterStage,
     Extractor,
@@ -32,15 +33,18 @@ except PackageNotFoundError:  # pragma: no cover - running from a source tree
 
 __all__ = [
     "ChapterStage",
+    "Entry",
     "Extractor",
     "ItemList",
     "NovelStage",
     "Paginate",
+    "Registry",
     "Request",
     "SearchStage",
     "SourceSpec",
     "TocStage",
     "Var",
     "hook_points",
+    "normalise_host",
     "__version__",
 ]
