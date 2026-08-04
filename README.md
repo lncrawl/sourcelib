@@ -15,16 +15,23 @@ pip install lncrawl-sourcelib
 ## What it does
 
 ```bash
-sourcelib check specs/            # validate documents against the model
-sourcelib schema -o schema.json   # write the JSON Schema editors read
+sourcelib check                          # resolve and validate every document
+sourcelib resolve specs/example.com.yaml # what a spec actually says once merged
+sourcelib schema -o schema.json          # the JSON Schema editors read
 ```
 
 ```python
-from sourcelib import SourceSpec
-from sourcelib.spec.loader import load_file
+from sourcelib.spec.checks import check_resolved
+from sourcelib.spec.resolve import resolve_file
 
-spec = load_file("specs/example.com.yaml")
+spec = resolve_file("specs/example.com.yaml", root=".")
+for problem in check_resolved(spec):
+    print(problem)
 ```
+
+`resolve` matters more than it looks. A spec can inherit through a chain of bases, so
+"what am I actually running" has to be answerable in one command or a deep chain becomes
+undebuggable.
 
 ## Why it is its own package
 
