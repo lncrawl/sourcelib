@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Collection, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Collection, Dict, List, Mapping, Optional, Tuple, Union
 
 from sourcelib.fetch import Fetcher, run_request, walk_pages
 from sourcelib.hooks import Context, HookRegistry
@@ -206,21 +206,29 @@ class Interpreter:
         if truncated:
             self.report.truncated.append("search")
 
-        results: List[SearchResult] = []
+        collected: List[Mapping[str, Any]] = []
         for page in pages:
             rows, skipped = self._rows(stage, page, ("url",))
             if skipped:
                 self.report.skipped["search"] = self.report.skipped.get("search", 0) + skipped
-            for row in rows:
-                results.append(
-                    SearchResult(
-                        title=_text(row.get("title")),
-                        url=_text(row.get("url")),
-                        info=_text(row.get("info")),
-                        extras=_extras(row, ("title", "url", "info")),
-                    )
-                )
-        return results
+            collected.extend(row.fields for row in rows)
+
+        # The hook takes the rows the spec produced and returns the rows to use, so it can filter
+        # a listing that answers with more than the query asked for. Bindable but never called
+        # before this, which is the one failure a contributor cannot debug from the outside.
+        hooked, hook_ctx = self._hook("search.items")
+        if hooked is not None:
+            collected = list(hooked(collected, self.documents.get("search"), hook_ctx) or [])
+
+        return [
+            SearchResult(
+                title=_text(row.get("title")),
+                url=_text(row.get("url")),
+                info=_text(row.get("info")),
+                extras=_extras(row, ("title", "url", "info")),
+            )
+            for row in collected
+        ]
 
     # -- novel ------------------------------------------------------------------------ #
 
@@ -282,7 +290,15 @@ class Interpreter:
         return None
 
     def _language(self, stage: Any, document: Document) -> Optional[str]:
-        """Detection beats declaration, per section 3.2's precedence table."""
+        """Detection beats declaration, per section 3.2's precedence table.
+
+        The hook runs last, over whatever detection and declaration settled on, which is how
+        every other `novel.*` field behaves. This field does not go through `_field`, so without
+        the call here a bound `novel.language` hook was accepted and then never consulted.
+        """
+        return self._hooked("novel.language", self._read_language(stage, document), document)
+
+    def _read_language(self, stage: Any, document: Document) -> Optional[str]:
         detected = extract(
             Extractor.model_validate(
                 {
@@ -364,7 +380,13 @@ class Interpreter:
         if not rows:
             raise CrawlError("toc.items", "matched no chapters")
 
-        if stage.volumes is None:
+        # A `toc.volumes` hook was reachable only from the hook-driven list, so a spec that
+        # declared its chapters normally could bind the point and be ignored. It runs here over
+        # whatever the declared `volumes` produced, and may supply grouping where there was none.
+        hooked_titles = self._hooked_volumes(document, rows)
+        if hooked_titles:
+            titles.update(hooked_titles)
+        elif stage.volumes is None:
             group_by_size(rows, self.spec.chapters_per_volume)
 
         # Sorting runs after volume assignment, because assignment is positional in document
@@ -450,16 +472,24 @@ class Interpreter:
         request = stage.request or _get(url)
         context = self.context(novel_url=novel.url, chapter=chapter.context())
 
-        document = run_request(
-            request,
-            self.fetcher,
-            context,
-            cache=dict(self.documents),
-            default_url=url,
-            parser=self.spec.parser or "html.parser",
-            spec_headers=self.spec.headers,
-            spec_encoding=self.spec.encoding,
-        )
+        # A `chapter.request` hook replaces the fetch, exactly as it does for the other three
+        # stages. This path called `run_request` directly rather than going through `_run`, so
+        # the point was bindable and silently dead: the only stage where that was true.
+        fetch_hook, hook_ctx = self._hook("chapter.request")
+        if fetch_hook is not None:
+            document = fetch_hook(url, hook_ctx)
+        else:
+            document = run_request(
+                request,
+                self.fetcher,
+                context,
+                # A copy, so a chapter document never becomes a `page:` target for a later one.
+                cache=dict(self.documents),
+                default_url=url,
+                parser=self.spec.parser or "html.parser",
+                spec_headers=self.spec.headers,
+                spec_encoding=self.spec.encoding,
+            )
         self.vars.begin_chapter(document)
 
         pages, truncated = walk_pages(
@@ -489,6 +519,21 @@ class Interpreter:
         return chapter
 
     def _chapter_url(self, stage: Any, chapter: Chapter, novel: Novel) -> str:
+        """The address to fetch, after any `chapter.url` hook has had it.
+
+        The hook runs even when the spec declares no `url`, which is the case that matters: a
+        point for computing an address the format cannot express is useless if it only fires
+        where an expressible address was already written down.
+        """
+        return _text(
+            self._hooked(
+                "chapter.url",
+                self._read_chapter_url(stage, chapter, novel),
+                self.documents.get("toc"),
+            )
+        )
+
+    def _read_chapter_url(self, stage: Any, chapter: Chapter, novel: Novel) -> str:
         if stage.url is None:
             return chapter.url
         if isinstance(stage.url, str):
@@ -557,5 +602,10 @@ def _blank(value: Any) -> bool:
     return False
 
 
-def _extras(row: Row, named: Collection[str]) -> Dict[str, Any]:
-    return {k: v for k, v in row.fields.items() if k not in named}
+def _extras(row: Union[Row, Mapping[str, Any]], named: Collection[str]) -> Dict[str, Any]:
+    """Whatever a row carries beyond the fields the stage names.
+
+    Accepts a plain mapping as well as a Row, because a hook returns dicts rather than Rows.
+    """
+    fields = row.fields if isinstance(row, Row) else row
+    return {k: v for k, v in fields.items() if k not in named}

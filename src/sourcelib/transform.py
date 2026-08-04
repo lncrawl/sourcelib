@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import re
 import unicodedata
+import warnings
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple, Union
 
-from bs4 import BeautifulSoup, Comment, Tag
+from bs4 import BeautifulSoup, Comment, MarkupResemblesLocatorWarning, Tag
 from bs4.element import NavigableString
 
 __all__ = [
@@ -93,6 +94,23 @@ def _as_tag(value: Any) -> Tag:
     if isinstance(value, Tag):
         return value
     raise StepError(f"expected a node, got {type(value).__name__}")
+
+
+def _carries_content(fragment: str) -> bool:
+    """Whether a serialised fragment holds readable text or an image.
+
+    A paragraph made only of markup is dropped, but one holding just an `<img>` is kept, which is
+    how a manga page survives a text-shaped pipe.
+
+    BeautifulSoup warns when the string it is handed looks like a URL rather than markup, and here
+    it often is one: a blogger post whose whole paragraph is a bare link. The library documents
+    that warning as spurious for exactly this case, so it is silenced around this parse and
+    nowhere else.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", MarkupResemblesLocatorWarning)
+        parsed = BeautifulSoup(fragment, "html.parser")
+    return bool(parsed.get_text().strip()) or parsed.find("img") is not None
 
 
 def _text_of(value: Any) -> str:
@@ -234,8 +252,7 @@ def _paragraphs(node: Any, block_tags: Any = None, preserve: Any = None) -> str:
         current.clear()
         if not joined:
             return
-        without_markup = BeautifulSoup(joined, "html.parser")
-        if without_markup.get_text().strip() or without_markup.find("img"):
+        if _carries_content(joined):
             paragraphs.append(f"<p>{joined}</p>")
 
     def walk(parent: Tag) -> None:

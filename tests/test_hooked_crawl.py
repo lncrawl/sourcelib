@@ -10,9 +10,10 @@ import base64
 import pytest
 
 from sourcelib.fetch import RecordedFetcher
+from sourcelib.hooks import hook_points
 from sourcelib.runtime import CrawlError, Interpreter
 from sourcelib.spec.extract import Document
-from sourcelib.spec.model import SourceSpec
+from sourcelib.spec.model import SESSION_HOOK_POINTS, SourceSpec
 
 BODY_HOOK = '''
 """One host's hooks, sharing the decoding it needs."""
@@ -278,3 +279,96 @@ class TestContextContents:
 
     def test_a_document_is_what_the_hook_receives(self):
         assert isinstance(Document.from_html("<p/>"), Document)
+
+
+class TestEveryPointIsReachable:
+    """A bound hook must actually be called.
+
+    Hook points are derived from the stage set (section 3.9.2), so the enum grows on its own
+    while the calls that honour it are hand-written. Five points were legal, bindable and dead:
+    `search.items`, `novel.language`, `toc.volumes`, `chapter.request` and `chapter.url`. That is
+    the one failure a contributor cannot debug from outside, because validation passes and the
+    hook simply never runs.
+
+    Table-driven on `hook_points()` rather than one test per point, so a point added later is
+    covered without anyone remembering to cover it.
+    """
+
+    #: Points belonging to the session rather than to a crawl. `check_response` is the fetcher's
+    #: to call on every response and `login` is the application's to invoke; neither is reached
+    #: by reading a novel, so this test cannot speak for them.
+    SESSION = frozenset(SESSION_HOOK_POINTS)
+
+    SPEC = {
+        "spec": 1,
+        "base_url": "https://e.test/",
+        "search": {
+            "request": {"get": "{origin}/s?q={query}"},
+            "css": ".r",
+            "fields": {"title": {"css": "a"}, "url": {"css": "a", "attr": "href"}},
+        },
+        "novel": {
+            "title": {"css": "h1.t"},
+            "cover": {"css": "img"},
+            "authors": {"css": ".a"},
+            "tags": {"css": ".g"},
+            "synopsis": {"css": ".s"},
+        },
+        "toc": {
+            "request": {"page": "novel"},
+            "items": {
+                "css": "li.c",
+                "fields": {"title": {"css": "a"}, "url": {"css": "a", "attr": "href"}},
+            },
+            "volumes": {"css": "li.v", "fields": {"title": {}}},
+        },
+        "chapter": {"body": {"css": "#content"}},
+    }
+
+    NOVEL = (
+        "<html><body><h1 class=t>T</h1>"
+        '<ul><li class=v>Vol 1</li><li class=c><a href="/c/1">Ch 1</a></li></ul></body></html>'
+    )
+    CHAPTER = "<html><body><div id=content><p>hi</p></div></body></html>"
+    SEARCH = '<html><body><div class=r><a href="/n/x">Res</a></div></body></html>'
+
+    def _answer(self, point, called):
+        """A marker that records the call and returns something the point will accept."""
+
+        def hook(*args, **kwargs):
+            called.append(point)
+            if point == "toc.items":
+                return [{"url": "https://e.test/c/1", "title": "Ch 1"}]
+            if point == "search.items":
+                return [{"url": "https://e.test/n/x", "title": "Res"}]
+            if point == "toc.volumes":
+                return {}
+            if point.endswith(".request"):
+                markup = self.CHAPTER if point.startswith("chapter") else self.NOVEL
+                return Document.from_html(markup, url="https://e.test/n/x")
+            if point == "chapter.url":
+                return "https://e.test/c/1"
+            return args[0] if args else None
+
+        return hook
+
+    @pytest.mark.parametrize("point", sorted(set(hook_points()) - frozenset(SESSION_HOOK_POINTS)))
+    def test_the_point_is_called(self, point):
+        called: list = []
+        site = RecordedFetcher(
+            {
+                "https://e.test/n/x": self.NOVEL,
+                "https://e.test/c/1": self.CHAPTER,
+                "https://e.test/s?q=q": self.SEARCH,
+            }
+        )
+        interpreter = Interpreter(
+            SourceSpec.model_validate(self.SPEC),
+            site,
+            hooks={point: (self._answer(point, called), "probe")},
+        )
+        interpreter.search("q")
+        novel = interpreter.read_novel("https://e.test/n/x")
+        interpreter.download_chapter(novel, novel.chapters[0])
+
+        assert called == [point] or point in called, f"{point} is bindable but never called"
