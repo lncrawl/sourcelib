@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lncrawl-sourcelib"
-version = "0.1.2"
+version = "0.1.3"
 description = "Interpreter for declarative light-novel source definitions, as defined by RFC-0001."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -35,6 +35,7 @@ classifiers = [
 
 dependencies = [
     "idna>=3.4",
+    "lxml>=5.0",
     "pydantic>=2.7",
     "PyYAML>=6.0",
     "beautifulsoup4>=4.12",
@@ -118,6 +119,7 @@ include = ["src", "tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py39"
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

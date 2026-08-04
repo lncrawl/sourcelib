@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-08-04
+
+### Changed
+
+- **`lxml` is the default parser**, and it is now a dependency. It is faster than the standard library's and recovers from real-world markup better, which matters because a selector that silently matches nothing is the most common defect in a source. `parser:` still overrides it per spec, for the pages lxml restructures. The default lived in eleven places and is now one constant.
+
+  **This changes what a spec produces**, so a recorded fixture made before this release will not replay against it. Re-record after upgrading.
+
+### Fixed
+
+- **Five hook points were legal, bindable and never called.** `search.items`, `novel.language`, `toc.volumes`, `chapter.request` and `chapter.url` all passed validation and then did nothing, which is the one failure a spec author cannot diagnose from outside the interpreter. Points are derived from the stage set (section 3.9.2) while the calls honouring them are hand-written, so the test is now parametrised over `hook_points()` and a point added later is covered without anyone remembering to cover it.
+
+- **A parsed fragment carried the parser's wrapper into its output.** `lxml` wraps every fragment in `<html><body>` while `html.parser` adds nothing, so steps that read a node's children treated that scaffolding as content: `paragraphs` produced `<p><html><body>text</body></html></p>` for a synopsis arriving as a JSON string, which is the common shape rather than an unusual one. `paragraphs`, `inner_html` and `drop_leading` now all skip it. The same off-by-one-level defect meant `drop_leading` found no blocks at all under lxml, so a duplicated chapter heading was never removed.
+
+- **`paragraphs` leaked a BeautifulSoup warning to stderr** when a fragment happened to look like a URL, which on a Blogger post is an ordinary paragraph. The library documents that warning as spurious for this use.
+
 ## [0.1.2] - 2026-08-04
 
 All four come from running the shared WordPress base against a live Madara host, and every one made `from` less useful than the RFC describes.
@@ -60,6 +76,7 @@ First release. Implements [RFC-0001](docs/0001-source-definition.md) at `spec: 1
 
 - **Fetching is an extra.** `pip install lncrawl-sourcelib` validates, resolves and transforms with no HTTP stack; `[fetch]` adds one. The definitions repository's CI and anyone only writing YAML should not need a TLS impersonation library.
 
+[0.1.3]: https://github.com/lncrawl/sourcelib/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/lncrawl/sourcelib/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/lncrawl/sourcelib/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/lncrawl/sourcelib/releases/tag/v0.1.0

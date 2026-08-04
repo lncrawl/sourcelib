@@ -3,6 +3,7 @@
 import pytest
 from bs4 import BeautifulSoup
 
+from sourcelib.spec.extract import DEFAULT_PARSER
 from sourcelib.transform import (
     REGISTRY,
     StepError,
@@ -14,7 +15,7 @@ from sourcelib.transform import (
 
 
 def soup(markup):
-    return BeautifulSoup(markup, "html.parser")
+    return BeautifulSoup(markup, DEFAULT_PARSER)
 
 
 class TestParseStep:
@@ -345,3 +346,45 @@ class TestApplyPipe:
         result = apply_pipe(soup(markup), pipe)
         assert "<a " not in result and "<span>" not in result
         assert "Read here now" in result
+
+
+class TestBlocksAreParserIndependent:
+    """A step reading top-level blocks must see the same ones under either parser.
+
+    `lxml` wraps a fragment in `<html><body>` and `html.parser` adds nothing, so code that stepped
+    down one level was right for one and left every block buried under `<body>` for the other. That
+    failed quietly: the blocks came back as a single element whose text was the whole body, so
+    `drop_leading` matched nothing and the duplicated heading stayed in every chapter.
+    """
+
+    HEADING = "<p>Chapter 5 The Gate</p><p>Real text.</p>"
+    WRAPPED = f"<div>{HEADING}</div>"
+    STEP = {"drop_leading": {"matches": r"(?i)^\s*chapter\s+\d+"}}
+
+    @pytest.mark.parametrize("parser", ["lxml", "html.parser"])
+    @pytest.mark.parametrize("markup", [HEADING, WRAPPED], ids=["bare", "wrapped"])
+    def test_drop_leading_finds_the_heading(self, parser, markup):
+        node = apply_step(BeautifulSoup(markup, parser), self.STEP)
+        text = node.get_text()
+        assert "Chapter 5" not in text
+        assert "Real text." in text
+
+    @pytest.mark.parametrize("parser", ["lxml", "html.parser"])
+    def test_paragraphs_agree_across_parsers(self, parser):
+        assert apply_step(BeautifulSoup(self.WRAPPED, parser), "paragraphs") == (
+            "<p>Chapter 5 The Gate</p><p>Real text.</p>"
+        )
+
+    def test_a_parsed_fragment_does_not_carry_its_wrapper_into_output(self):
+        """The case that shipped silently: a synopsis arriving as a JSON string.
+
+        `parse_html` hands `paragraphs` a document, and `lxml` wraps every fragment in
+        `<html><body>`. Treating those as content produced
+        `<p><html><body>Pledge for more releases!</body></html></p>` in a real recording.
+        """
+        node = apply_pipe("Pledge for more releases!", ["parse_html", "paragraphs"], {})
+        assert node == "<p>Pledge for more releases!</p>"
+
+    def test_inner_html_of_a_parsed_fragment_is_the_markup_that_went_in(self):
+        node = apply_pipe("<p>a</p><p>b</p>", ["parse_html", "inner_html"], {})
+        assert node == "<p>a</p><p>b</p>"

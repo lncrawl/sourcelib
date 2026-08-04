@@ -24,6 +24,7 @@ from bs4 import BeautifulSoup, Comment, MarkupResemblesLocatorWarning, Tag
 from bs4.element import NavigableString
 
 __all__ = [
+    "DEFAULT_PARSER",
     "REGISTRY",
     "Kind",
     "StepError",
@@ -33,6 +34,14 @@ __all__ = [
     "parse_step",
     "validate_pipe",
 ]
+
+#: The parser a spec gets when it declares none. `lxml` is faster than the standard library's and
+#: recovers from real-world markup better, which matters because a selector that silently matches
+#: nothing is the most common defect in a source.
+#:
+#: A default, not a rule. Some pages are lxml-hostile, and `parser:` on a spec is how one of those
+#: asks for `html.parser` instead.
+DEFAULT_PARSER = "lxml"
 
 Kind = str
 
@@ -61,6 +70,11 @@ DEFAULT_PRESERVE: Tuple[str, ...] = ("img", "pre", "canvas")
 #: Deferred image attributes, in the order `unlazy_images` tries them. Reversing this picks
 #: the placeholder the site is deferring away from.
 LAZY_ATTRS: Tuple[str, ...] = ("data-lazy-src", "data-src", "src")
+
+#: Elements a parser adds around a fragment, which `_blocks_of` descends through. Not any single
+#: wrapper: descending through a lone `<div>` the site actually wrote would change what the spec
+#: selected.
+_PARSER_WRAPPERS: FrozenSet[str] = frozenset({"html", "body"})
 
 #: Steps that yield nothing when they do not match. Everything else passes its value through.
 FILTERS: FrozenSet[str] = frozenset({"regex", "reject"})
@@ -109,7 +123,7 @@ def _carries_content(fragment: str) -> bool:
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", MarkupResemblesLocatorWarning)
-        parsed = BeautifulSoup(fragment, "html.parser")
+        parsed = BeautifulSoup(fragment, DEFAULT_PARSER)
     return bool(parsed.get_text().strip()) or parsed.find("img") is not None
 
 
@@ -208,16 +222,41 @@ def _drop_empty_nodes(node: Any) -> Tag:
     return tag
 
 
+def _content_root(tag: Tag) -> Tag:
+    """The element whose children are the real content, past anything the parser added.
+
+    `lxml` wraps every fragment in `<html><body>` while `html.parser` adds nothing, so how deep the
+    content sits is the parser's choice and not the markup's. Any step that reads children has to
+    skip that scaffolding or it treats it as content: `paragraphs` emitted
+    `<p><html><body>text</body></html></p>` for a synopsis that arrived as a JSON string, which is
+    the common case rather than an unusual one.
+    """
+    current = tag
+    while True:
+        children = [c for c in current.children if isinstance(c, Tag)]
+        if len(children) == 1 and children[0].name in _PARSER_WRAPPERS:
+            current = children[0]
+            continue
+        return current
+
+
 def _blocks_of(tag: Tag) -> List[Tag]:
     """The element children a step should treat as the node's top-level blocks.
 
-    A fragment produced by ``parse_html`` is a document whose only element child is the
-    wrapper the markup happened to have, so its children are one level further down than a
-    selected element's. Descending through a lone wrapper makes both spell the same thing,
-    which matters because a body arriving inside a JSON field is common.
+    A selected element's blocks are simply its element children. A *parsed* fragment sits deeper,
+    and by two amounts that unwind in order: the parser's scaffolding, skipped by name because those
+    are the only tags a parser invents, and then one lone wrapper the markup itself had, so
+    `<div><p>a</p><p>b</p></div>` yields the two paragraphs and not the div. The second is skipped by
+    shape rather than by name, since the site chose that tag.
+
+    Getting either wrong is quiet: the blocks come back as one element whose text is the whole body,
+    so `drop_leading` either matches nothing or deletes everything.
     """
-    children = [c for c in tag.children if isinstance(c, Tag)]
-    if isinstance(tag, BeautifulSoup) and len(children) == 1:
+    if not isinstance(tag, BeautifulSoup):
+        return [c for c in tag.children if isinstance(c, Tag)]
+
+    children = [c for c in _content_root(tag).children if isinstance(c, Tag)]
+    if len(children) == 1:
         return [c for c in children[0].children if isinstance(c, Tag)]
     return children
 
@@ -282,13 +321,15 @@ def _paragraphs(node: Any, block_tags: Any = None, preserve: Any = None) -> str:
             if inner.strip():
                 current.append(f"<{child.name}>{inner}</{child.name}>")
 
-    walk(tag)
+    walk(_content_root(tag))
     flush()
     return "".join(paragraphs)
 
 
 def _inner_html(node: Any) -> str:
-    return _as_tag(node).decode_contents()
+    # The content root, not the node: on a parsed fragment the node's own contents are the
+    # parser's `<html><body>` wrapper rather than the markup that went in.
+    return _content_root(_as_tag(node)).decode_contents()
 
 
 # --------------------------------------------------------------------------------------- #
@@ -296,7 +337,7 @@ def _inner_html(node: Any) -> str:
 # --------------------------------------------------------------------------------------- #
 
 
-def _parse_html(value: Any, parser: Any = "html.parser") -> Tag:
+def _parse_html(value: Any, parser: Any = DEFAULT_PARSER) -> Tag:
     return BeautifulSoup(_text_of(value), str(parser))
 
 

@@ -20,7 +20,7 @@ from sourcelib.fetch import Fetcher, run_request, walk_pages
 from sourcelib.hooks import Context, HookRegistry
 from sourcelib.interpolate import render_url
 from sourcelib.models import Chapter, Novel, SearchResult, Volume
-from sourcelib.spec.extract import Document, extract
+from sourcelib.spec.extract import DEFAULT_PARSER, Document, extract
 from sourcelib.spec.items import Row, assign_volumes, group_by_size, read_rows, sort_rows
 from sourcelib.spec.model import Extractor, ItemList, SourceSpec
 from sourcelib.vars import VarCache
@@ -149,7 +149,7 @@ class Interpreter:
             self.fetcher,
             {"origin": self.origin, "vars": {}},
             cache={},
-            parser=self.spec.parser or "html.parser",
+            parser=self.spec.parser or DEFAULT_PARSER,
             spec_headers=self.spec.headers,
             spec_encoding=self.spec.encoding,
         )
@@ -174,7 +174,7 @@ class Interpreter:
                 self.context(**ctx),
                 cache=self.documents,
                 default_url=default_url,
-                parser=self.spec.parser or "html.parser",
+                parser=self.spec.parser or DEFAULT_PARSER,
                 spec_headers=self.spec.headers,
                 spec_encoding=self.spec.encoding,
                 yields=yields,
@@ -201,7 +201,7 @@ class Interpreter:
             self.fetcher,
             self.context(query=query),
             has_items=has_items,
-            parser=self.spec.parser or "html.parser",
+            parser=self.spec.parser or DEFAULT_PARSER,
         )
         if truncated:
             self.report.truncated.append("search")
@@ -346,7 +346,7 @@ class Interpreter:
             self.fetcher,
             self.context(novel_url=url),
             has_items=has_items,
-            parser=self.spec.parser or "html.parser",
+            parser=self.spec.parser or DEFAULT_PARSER,
         )
         if truncated:
             self.report.truncated.append("toc")
@@ -486,7 +486,7 @@ class Interpreter:
                 # A copy, so a chapter document never becomes a `page:` target for a later one.
                 cache=dict(self.documents),
                 default_url=url,
-                parser=self.spec.parser or "html.parser",
+                parser=self.spec.parser or DEFAULT_PARSER,
                 spec_headers=self.spec.headers,
                 spec_encoding=self.spec.encoding,
             )
@@ -497,7 +497,7 @@ class Interpreter:
             request.paginate,
             self.fetcher,
             context,
-            parser=self.spec.parser or "html.parser",
+            parser=self.spec.parser or DEFAULT_PARSER,
         )
         if truncated:
             self.report.truncated.append(f"chapter {chapter.id}")

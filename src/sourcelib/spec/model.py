@@ -451,7 +451,9 @@ class SourceSpec(Node):
     has_mtl: bool = Field(default=False, description="Content is machine-translated.")
     parser: Optional[str] = Field(
         default=None,
-        description="The markup parser, for a site a lenient parser restructures.",
+        description=(
+            "The markup parser. Defaults to lxml; set html.parser for a page lxml restructures."
+        ),
     )
     encoding: Optional[str] = Field(
         default=None,

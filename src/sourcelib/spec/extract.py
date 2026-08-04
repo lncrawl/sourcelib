@@ -15,9 +15,10 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup, Tag
 
 from sourcelib.spec.model import Extractor
-from sourcelib.transform import REGISTRY, apply_pipe
+from sourcelib.transform import DEFAULT_PARSER, REGISTRY, apply_pipe
 
 __all__ = [
+    "DEFAULT_PARSER",
     "Document",
     "ExtractError",
     "default_pipe",
@@ -83,7 +84,7 @@ class Document:
         cls,
         markup: str,
         url: str = "",
-        parser: str = "html.parser",
+        parser: str = DEFAULT_PARSER,
         headers: Optional[Mapping[str, str]] = None,
     ) -> "Document":
         return cls(url=url, node=BeautifulSoup(markup, parser), text=markup, headers=headers)

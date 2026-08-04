@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Seque
 from urllib.parse import urljoin
 
 from sourcelib.interpolate import render, render_url
-from sourcelib.spec.extract import Document, extract
+from sourcelib.spec.extract import DEFAULT_PARSER, Document, extract
 from sourcelib.spec.model import Paginate, Request
 
 __all__ = [
@@ -160,7 +160,7 @@ def run_request(
     context: Mapping[str, Any],
     cache: Optional[Dict[str, Document]] = None,
     default_url: Optional[str] = None,
-    parser: str = "html.parser",
+    parser: str = DEFAULT_PARSER,
     spec_headers: Optional[Mapping[str, str]] = None,
     spec_encoding: Optional[str] = None,
     yields: Optional[Callable[[Document], bool]] = None,
@@ -328,7 +328,7 @@ def walk_pages(
     fetcher: Fetcher,
     context: Mapping[str, Any],
     has_items: Optional[Callable[[Document], bool]] = None,
-    parser: str = "html.parser",
+    parser: str = DEFAULT_PARSER,
     headers: Optional[Mapping[str, str]] = None,
     encoding: Optional[str] = None,
     workers: int = DEFAULT_WORKERS,
