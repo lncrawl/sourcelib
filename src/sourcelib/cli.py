@@ -13,7 +13,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 import yaml
 
@@ -98,20 +98,39 @@ def _resolve(path: Path, root: Optional[Path], as_json: bool) -> int:
     return 0
 
 
-def _try(path: Path, url: str, root: Optional[Path], as_json: bool, sample: int) -> int:
+def _origin_and_rate(path: Path, repo: Path) -> Tuple[str, float]:
+    """The host and the pace a spec asks for, resolved through `extends`.
+
+    Both have to come from the *resolved* document. A three-line spec declares neither, and its
+    base declares both, so reading the raw file gets the pace of a spec that inherits one wrong.
+    Passing no pace at all was worse: `rate_limit` was declared, documented and validated, and then
+    every command ignored it. A base that sets it does so because the host challenges bursts.
+    """
+    try:
+        document = parse_yaml(path.read_text(encoding="utf-8"))
+        resolved = resolve_document(document, root=repo, origin=path)
+        spec = SourceSpec.model_validate(resolved)
+    except Exception:  # the trial itself reports a document that will not load
+        return "", 0.0
+    return str(spec.base_url or ""), float(spec.rate_limit or 0.0)
+
+
+def _try(
+    path: Path,
+    url: str,
+    root: Optional[Path],
+    as_json: bool,
+    sample: int,
+    toc_pages: Optional[int],
+) -> int:
     from sourcelib.http import ScraperFetcher
     from sourcelib.trial import format_trial, run_trial
 
     repo = _repo_root(root, [path])
-    origin = ""
-    try:
-        document = parse_yaml(path.read_text(encoding="utf-8"))
-        origin = str(document.get("base_url") or "")
-    except Exception:  # the trial itself reports a document that will not parse
-        pass
+    origin, rate = _origin_and_rate(path, repo)
 
-    with ScraperFetcher(origin=origin) as fetcher:
-        trial = run_trial(path, url, fetcher, root=repo, sample=sample)
+    with ScraperFetcher(origin=origin, rate_limit=rate) as fetcher:
+        trial = run_trial(path, url, fetcher, root=repo, sample=sample, toc_pages=toc_pages)
 
     if as_json:
         print(json.dumps(trial.to_dict(), indent=2, ensure_ascii=False))
@@ -155,7 +174,8 @@ def _record(path: Path, url: str, root: Optional[Path]) -> int:
     from sourcelib.trial import format_trial, run_trial
 
     repo = _repo_root(root, [path])
-    with ScraperFetcher(origin=url) as live:
+    origin, rate = _origin_and_rate(path, repo)
+    with ScraperFetcher(origin=origin, rate_limit=rate) as live:
         recorder = RecordingFetcher(live)
         trial = run_trial(path, url, recorder, root=repo)
 
@@ -246,8 +266,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         type=int,
         default=3,
         metavar="N",
-        help="how many chapters to download: first, middle and last by default. Two would let "
-        "a broken join across a multi-page body through",
+        help="how many chapters to download, spread evenly and always including the first and "
+        "last. Three by default. Two would let a broken join across a multi-page body through, "
+        "and more crosses more of the boundaries where a theme changes shape",
+    )
+    trial.add_argument(
+        "--toc-pages",
+        type=int,
+        default=None,
+        metavar="N",
+        help="walk at most N pages of the chapter list. For iterating on a spec: a `while` or "
+        "`next` walk is sequential, so a long list is hundreds of requests before the first "
+        "chapter is read. The reported chapter count is then short, and says so",
     )
 
     keep = sub.add_parser(
@@ -282,7 +312,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "resolve":
         return _resolve(args.path, args.root, args.json)
     if args.command == "try":
-        return _try(args.path, args.url, args.root, args.json, args.sample)
+        return _try(args.path, args.url, args.root, args.json, args.sample, args.toc_pages)
     if args.command == "explain":
         return _explain(args.url, args.json, args.render)
     if args.command == "record":

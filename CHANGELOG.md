@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-08-04
+
+### Added
+
+- **`try --toc-pages N`**, a cap on how much of the chapter list to walk. Reading the list is what a trial spends its time on: a `count`-paginated stage fetches its pages concurrently, but `while` and `next` are sequential by nature, so a novel with a hundred pages of list is a hundred requests before the first chapter is read. The reported chapter count is then short and the report says so.
+
+### Fixed
+
+- **`rate_limit` was declared, validated and then ignored.** `ScraperFetcher` accepts a pace and applies it to the scraper's pacer, and no command ever passed one, so every run went at full speed however politely a spec asked. It is also read from the *resolved* document now, because a three-line spec declares nothing and inherits the pace its base set for a reason: Blogger challenges the requests behind the first in a burst.
+
+- **`--sample` silently capped at three.** Every count above two returned first, middle and last, so asking for twenty fetched three. Samples are now spread evenly across the list, always including the first and the last, and the default of three picks exactly what it always did. Spread rather than random, because `record` bakes the sampled chapters into a fixture and a random choice would make recordings irreproducible.
+
+- **`drop_leading` could delete a whole chapter and still report success.** It removed the first leading block whose text matched, and some themes wrap the entire chapter in one element that opens by repeating the title: on one novelfull chapter that took a 5435-character body down to a 172-character error notice, with every field still reporting `ok`. The step is a cleanup, and RFC-0001 section 6.2 is explicit that a cleanup with nothing to do yields its value unchanged, so this was a defect against the spec rather than a gap in it. A candidate must now look like a heading: no block-level elements of its own, and not almost all of the node's text. The first test is the reliable one, since it does not depend on how long the chapter is.
+
 ## [0.1.3] - 2026-08-04
 
 ### Changed
@@ -76,6 +90,7 @@ First release. Implements [RFC-0001](docs/0001-source-definition.md) at `spec: 1
 
 - **Fetching is an extra.** `pip install lncrawl-sourcelib` validates, resolves and transforms with no HTTP stack; `[fetch]` adds one. The definitions repository's CI and anyone only writing YAML should not need a TLS impersonation library.
 
+[0.1.4]: https://github.com/lncrawl/sourcelib/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/lncrawl/sourcelib/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/lncrawl/sourcelib/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/lncrawl/sourcelib/compare/v0.1.0...v0.1.1

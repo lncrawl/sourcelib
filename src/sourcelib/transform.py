@@ -261,13 +261,38 @@ def _blocks_of(tag: Tag) -> List[Tag]:
     return children
 
 
+#: The share of a node's text one block may hold and still be taken for a heading. Deliberately
+#: high: it is a backstop for the shape the structural test cannot see, a whole body wrapped in one
+#: element with no blocks of its own, and a small fragment where a real heading is legitimately a
+#: large fraction of very little text must stay removable.
+_HEADING_SHARE = 0.9
+
+
+def _looks_like_a_heading(element: Tag, total: int) -> bool:
+    """Whether a matching block is plausibly a heading rather than the body itself.
+
+    Some themes wrap the whole chapter in one element that opens by repeating the title. That block
+    matches any heading pattern and holds everything, and removing it deleted a whole chapter while
+    the crawl still reported success. `drop_leading` is a cleanup (section 6.2), so when there is
+    nothing safe to do it must change nothing.
+
+    A heading is a leaf: it holds a line of text and no blocks of its own. That is the reliable
+    signal, because it does not depend on how long the chapter happens to be.
+    """
+    if element.find(list(DEFAULT_BLOCK_TAGS)) is not None:
+        return False
+    return not total or len(element.get_text()) < total * _HEADING_SHARE
+
+
 def _drop_leading(node: Any, matches: Any = None, within: Any = 1) -> Tag:
     tag = _as_tag(node)
     if not matches:
         raise StepError("drop_leading needs a `matches` pattern")
     pattern = re.compile(str(matches))
+    total = len(tag.get_text())
+
     for element in _blocks_of(tag)[: int(within)]:
-        if pattern.search(element.get_text()):
+        if pattern.search(element.get_text()) and _looks_like_a_heading(element, total):
             element.decompose()
             break  # at most one
     return tag

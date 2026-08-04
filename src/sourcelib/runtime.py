@@ -95,8 +95,13 @@ class Interpreter:
         fetcher: Fetcher,
         report: Optional[Report] = None,
         hooks: Optional[Mapping[str, Tuple[Callable[..., Any], str]]] = None,
+        toc_pages: Optional[int] = None,
     ) -> None:
         self.spec = spec
+        #: A cap on how many pages of the chapter list to walk. For a trial, not a crawl: three
+        #: pages prove the pagination works, while a `while` or `next` walk is sequential by
+        #: nature and a long list is hundreds of requests before the first chapter is read.
+        self.toc_pages = toc_pages
         self.fetcher = fetcher
         self.report = report or Report()
         self.origin = _origin_of(spec)
@@ -114,10 +119,11 @@ class Interpreter:
         fetcher: Fetcher,
         root: Optional[Path] = None,
         report: Optional[Report] = None,
+        toc_pages: Optional[int] = None,
     ) -> "Interpreter":
         """Build an interpreter, binding the spec's hooks from *root*."""
         bound = HookRegistry(root).bind(spec.hooks) if (root and spec.hooks) else {}
-        return cls(spec, fetcher, report, bound)
+        return cls(spec, fetcher, report, bound, toc_pages=toc_pages)
 
     # -- hooks ------------------------------------------------------------------------- #
 
@@ -347,6 +353,7 @@ class Interpreter:
             self.context(novel_url=url),
             has_items=has_items,
             parser=self.spec.parser or DEFAULT_PARSER,
+            limit=self.toc_pages,
         )
         if truncated:
             self.report.truncated.append("toc")

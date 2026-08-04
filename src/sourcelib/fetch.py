@@ -332,6 +332,7 @@ def walk_pages(
     headers: Optional[Mapping[str, str]] = None,
     encoding: Optional[str] = None,
     workers: int = DEFAULT_WORKERS,
+    limit: Optional[int] = None,
 ) -> Tuple[List[Document], bool]:
     """Every page of a paginated stage in order, and whether a limit truncated the result.
 
@@ -340,6 +341,14 @@ def walk_pages(
     """
     if paginate is None:
         return [first], False
+
+    # A caller may cap the walk more tightly than the spec does, which is how a trial stays quick on
+    # a chapter list hundreds of pages long. Applied as a tightened copy rather than threaded into
+    # each of the three walkers, all of which already respect `limit`, and never loosening what the
+    # spec asked for.
+    if limit is not None and (paginate.limit is None or limit < paginate.limit):
+        paginate = paginate.model_copy(update={"limit": limit})
+
     if paginate.next is not None:
         return _follow_links(first, paginate, fetcher, context, parser, headers, encoding)
     if paginate.count is not None:

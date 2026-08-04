@@ -388,3 +388,39 @@ class TestBlocksAreParserIndependent:
     def test_inner_html_of_a_parsed_fragment_is_the_markup_that_went_in(self):
         node = apply_pipe("<p>a</p><p>b</p>", ["parse_html", "inner_html"], {})
         assert node == "<p>a</p><p>b</p>"
+
+
+class TestDropLeadingWillNotEatTheBody:
+    """`drop_leading` is a cleanup, so having nothing safe to do means changing nothing.
+
+    Some themes wrap a whole chapter in one div that opens by repeating the title. That block
+    matches a heading pattern and holds the entire body, and removing it deleted a 5435-character
+    chapter down to a 172-character error notice while the trial still reported PASSED.
+    """
+
+    HEADING = "(?i)^\\s*chapter\\s+\\d+"
+
+    #: The real shape, from novelfull: one div wrapping the whole chapter, opening with the title
+    #: and holding the prose in blocks of its own.
+    WRAPPED = (
+        "<div><div><h4>Chapter 12: The Gate</h4>"
+        + ("<p>Real prose.</p>" * 40)
+        + "</div><div>If you find any errors, let us know.</div></div>"
+    )
+
+    def test_a_block_that_holds_the_body_survives(self):
+        node = apply_step(soup(self.WRAPPED), {"drop_leading": {"matches": self.HEADING}})
+        assert node.get_text().count("Real prose.") == 40
+
+    def test_a_whole_body_in_one_leaf_element_also_survives(self):
+        # No blocks to test structurally, so the share is what catches this one.
+        markup = "<div><div>Chapter 12: The Gate. " + ("Real prose. " * 40) + "</div></div>"
+        node = apply_step(soup(markup), {"drop_leading": {"matches": self.HEADING}})
+        assert "Real prose." in node.get_text()
+
+    def test_a_short_heading_is_still_removed(self):
+        markup = "<div><p>Chapter 12: The Gate</p><p>" + ("Real prose. " * 40) + "</p></div>"
+        node = apply_step(soup(markup), {"drop_leading": {"matches": self.HEADING}})
+        text = node.get_text()
+        assert "Chapter 12" not in text
+        assert "Real prose." in text

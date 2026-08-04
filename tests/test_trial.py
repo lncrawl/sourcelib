@@ -9,8 +9,9 @@ import json
 import pytest
 
 from sourcelib.fetch import RecordedFetcher
+from sourcelib.models import Chapter, Novel
 from sourcelib.spec.lines import line_map, locate
-from sourcelib.trial import format_trial, run_trial
+from sourcelib.trial import _sample, format_trial, run_trial
 
 SPEC_YAML = """spec: 1
 base_url: https://e.test/
@@ -225,3 +226,48 @@ class TestOutput:
             encoding="utf-8",
         )
         assert "PASSED" in format_trial(run(repo, site))
+
+
+class TestSampling:
+    """`--sample N` has to actually fetch N chapters, spread across the list."""
+
+    def novel(self, count):
+        book = Novel(url="https://e.test/n")
+        book.chapters = [
+            Chapter(id=i, url=f"https://e.test/c/{i}", title=f"C{i}") for i in range(1, count + 1)
+        ]
+        return book
+
+    @pytest.mark.parametrize("count", [1, 2, 3, 5, 20, 30])
+    def test_it_returns_what_was_asked_for(self, count):
+        # Every count above two used to collapse to first, middle and last, so a request for
+        # twenty silently fetched three.
+        assert len(_sample(self.novel(4649), count)) == count
+
+    def test_the_first_and_last_are_always_included(self):
+        picked = _sample(self.novel(4649), 20)
+        assert picked[0].id == 1
+        assert picked[-1].id == 4649
+
+    @pytest.mark.parametrize("total", [10, 40, 73, 74, 100, 4649])
+    def test_three_still_picks_exactly_what_it_used_to(self, total):
+        """The default must not move: a fixture records the pages it sampled.
+
+        An even count is where this broke. `round(36.5)` is 36, not 37, so a 74-chapter novel
+        started asking for chapter 37 while its recording held chapter 38, and the replay reported
+        a body of zero characters.
+        """
+        before = [1, total // 2 + 1, total]
+        assert [c.id for c in _sample(self.novel(total), 3)] == before
+
+    def test_the_spread_is_even(self):
+        picked = [c.id for c in _sample(self.novel(1000), 5)]
+        gaps = {picked[i + 1] - picked[i] for i in range(len(picked) - 1)}
+        assert max(gaps) - min(gaps) <= 1
+
+    def test_a_short_novel_yields_every_chapter_once(self):
+        assert [c.id for c in _sample(self.novel(3), 20)] == [1, 2, 3]
+
+    def test_it_is_deterministic(self):
+        book = self.novel(4649)
+        assert [c.id for c in _sample(book, 25)] == [c.id for c in _sample(book, 25)]

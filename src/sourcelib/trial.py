@@ -104,6 +104,7 @@ def run_trial(
     fetcher: Fetcher,
     root: Optional[Path] = None,
     sample: int = 3,
+    toc_pages: Optional[int] = None,
 ) -> Trial:
     """Read the spec at *path*, crawl *url* with it, and report field by field."""
     path = Path(path)
@@ -140,7 +141,7 @@ def run_trial(
         return trial
 
     report = Report()
-    interpreter = Interpreter.load(spec, fetcher, root=root, report=report)
+    interpreter = Interpreter.load(spec, fetcher, root=root, report=report, toc_pages=toc_pages)
 
     try:
         novel = interpreter.read_novel(url)
@@ -205,17 +206,32 @@ def _note_novel(note: Any, novel: Novel) -> None:
 
 
 def _sample(novel: Novel, count: int) -> List[Chapter]:
-    """First, middle and last. First-and-last would let a broken join through."""
+    """*count* chapters spread evenly across the list, always including the first and the last.
+
+    Evenly spread rather than first-middle-last, because asking for twenty used to get three: every
+    count above two returned the same three chapters, so the flag promising more quietly did nothing.
+
+    Spread rather than random, for two reasons. `record` bakes the sampled chapters into a fixture,
+    so a random choice would make recordings irreproducible and turn "did the site change?" into a
+    question nobody can answer. And a theme's oddities cluster: the chapters it wraps differently
+    come in runs, so an even spread crosses more of those boundaries than the same number of random
+    picks tends to.
+    """
     chapters = novel.chapters
-    if not chapters:
+    if not chapters or count < 1:
         return []
     if len(chapters) <= count:
         return list(chapters)
-    if count <= 1:
+    if count == 1:
         return [chapters[0]]
-    if count == 2:
-        return [chapters[0], chapters[-1]]
-    return [chapters[0], chapters[len(chapters) // 2], chapters[-1]]
+
+    # Rounded half *up*, not with `round`, whose banker's rounding turns an exact `.5` towards the
+    # even number. That is not a style choice: at three samples and an even chapter count it moves
+    # the middle pick down by one, so every recorded fixture would suddenly ask for a page it never
+    # recorded and report a body of zero characters. Half-up reproduces the previous default exactly.
+    step = (len(chapters) - 1) / (count - 1)
+    wanted = sorted({int(index * step + 0.5) for index in range(count)})
+    return [chapters[index] for index in wanted]
 
 
 def _try_chapter(interpreter: Interpreter, novel: Novel, chapter: Chapter, note: Any) -> Dict:
