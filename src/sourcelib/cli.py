@@ -13,7 +13,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 import yaml
 
@@ -124,13 +124,32 @@ def _try(
     toc_pages: Optional[int],
 ) -> int:
     from sourcelib.http import ScraperFetcher
-    from sourcelib.trial import format_trial, run_trial
+    from sourcelib.trial import run_trial
 
     repo = _repo_root(root, [path])
     origin, rate = _origin_and_rate(path, repo)
 
     with ScraperFetcher(origin=origin, rate_limit=rate) as fetcher:
         trial = run_trial(path, url, fetcher, root=repo, sample=sample, toc_pages=toc_pages)
+
+    return _report(trial, as_json)
+
+
+def _try_search(path: Path, query: str, root: Optional[Path], as_json: bool) -> int:
+    from sourcelib.http import ScraperFetcher
+    from sourcelib.trial import run_search_trial
+
+    repo = _repo_root(root, [path])
+    origin, rate = _origin_and_rate(path, repo)
+
+    with ScraperFetcher(origin=origin, rate_limit=rate) as fetcher:
+        trial = run_search_trial(path, query, fetcher, root=repo)
+
+    return _report(trial, as_json)
+
+
+def _report(trial: Any, as_json: bool) -> int:
+    from sourcelib.trial import format_trial
 
     if as_json:
         print(json.dumps(trial.to_dict(), indent=2, ensure_ascii=False))
@@ -279,6 +298,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "`next` walk is sequential, so a long list is hundreds of requests before the first "
         "chapter is read. The reported chapter count is then short, and says so",
     )
+    searching = sub.add_parser(
+        "try-search",
+        parents=[rooted],
+        help="run a spec's search stage against a live query and report what it returned",
+    )
+    searching.add_argument("path", type=Path)
+    searching.add_argument("query", help="what to search for. Use a title the host really carries")
+    searching.add_argument("--json", action="store_true", help="emit JSON instead of text")
 
     keep = sub.add_parser(
         "record", parents=[rooted], help="save a site's responses so a spec can be tested offline"
@@ -313,6 +340,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return _resolve(args.path, args.root, args.json)
     if args.command == "try":
         return _try(args.path, args.url, args.root, args.json, args.sample, args.toc_pages)
+
+    if args.command == "try-search":
+        return _try_search(args.path, args.query, args.root, args.json)
     if args.command == "explain":
         return _explain(args.url, args.json, args.render)
     if args.command == "record":

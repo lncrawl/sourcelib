@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from bs4 import Tag
 
 from sourcelib.interpolate import render
-from sourcelib.spec.extract import Document, extract, read_json_path
+from sourcelib.spec.extract import DEFAULT_PARSER, Document, extract, read_json_path
 from sourcelib.spec.model import Extractor, ItemList
 
 __all__ = ["Row", "assign_volumes", "group_by_size", "read_items", "read_rows"]
@@ -43,18 +43,41 @@ class Row:
         return f"Row({self.fields!r})"
 
 
-def _containers(item_list: ItemList, document: Document) -> List[Any]:
-    """The row containers, from a selector or a JSON path."""
+def _containers(item_list: ItemList, document: Document, parser: str = DEFAULT_PARSER) -> List[Any]:
+    """The row containers, from a selector or a JSON path.
+
+    `json` is read first, because `json` with `css` means parse then select (section 3.8): the
+    path names a string of markup and the selector runs inside what it becomes. Selecting first
+    would answer nothing at all, since a JSON body has no node to select in.
+    """
+    if item_list.json_ is not None:
+        data = read_json_path(document.parsed, item_list.json_)
+        if item_list.css is not None:
+            return _select_in_markup(data, item_list.css, parser)
+        if isinstance(data, list):
+            return list(data)
+        return [data] if data is not None else []
     if item_list.css is not None:
         if document.node is None:
             return []
         return list(document.node.select(item_list.css))
-    if item_list.json_ is not None:
-        data = read_json_path(document.parsed, item_list.json_)
-        if isinstance(data, list):
-            return list(data)
-        return [data] if data is not None else []
     return []
+
+
+def _select_in_markup(data: Any, selector: str, parser: str) -> List[Any]:
+    """Parse each fragment *data* holds, then select across all of them.
+
+    A list because an endpoint may answer with one fragment per result rather than one document,
+    and selecting across the parsed set reads both shapes without the spec saying which it is.
+    """
+    found: List[Any] = []
+    for fragment in data if isinstance(data, list) else [data]:
+        if not isinstance(fragment, str) or not fragment.strip():
+            continue
+        node = Document.from_html(fragment, parser=parser).node
+        if node is not None:
+            found.extend(node.select(selector))
+    return found
 
 
 def read_rows(
@@ -64,6 +87,7 @@ def read_rows(
     kinds: Optional[Mapping[str, str]] = None,
     pipes: Optional[Mapping[str, Any]] = None,
     start: int = 0,
+    parser: str = DEFAULT_PARSER,
 ) -> Tuple[List[Row], int]:
     """Every row *item_list* yields, and how many were skipped.
 
@@ -78,7 +102,7 @@ def read_rows(
     rows: List[Row] = []
     skipped = 0
 
-    for index, container in enumerate(_containers(item_list, document)):
+    for index, container in enumerate(_containers(item_list, document, parser)):
         scope = container if isinstance(container, Tag) else None
         json_scope = None if isinstance(container, Tag) else container
 
@@ -240,9 +264,10 @@ def read_items(
     required: Sequence[str] = (),
     kinds: Optional[Mapping[str, str]] = None,
     pipes: Optional[Mapping[str, Any]] = None,
+    parser: str = DEFAULT_PARSER,
 ) -> Tuple[List[Row], int]:
     """Rows, sorted and reversed as declared. Sorting runs after volume assignment."""
-    rows, skipped = read_rows(item_list, document, required, kinds, pipes)
+    rows, skipped = read_rows(item_list, document, required, kinds, pipes, parser=parser)
     return sort_rows(rows, item_list), skipped
 
 

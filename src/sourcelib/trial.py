@@ -28,7 +28,15 @@ from sourcelib.spec.loader import parse_yaml
 from sourcelib.spec.model import SourceSpec
 from sourcelib.spec.resolve import resolve_document
 
-__all__ = ["COMPARED", "Finding", "Trial", "format_trial", "run_trial", "summarise"]
+__all__ = [
+    "COMPARED",
+    "Finding",
+    "Trial",
+    "format_trial",
+    "run_search_trial",
+    "run_trial",
+    "summarise",
+]
 
 #: How much of a value to show. Enough to tell right from wrong, short enough to scan.
 PREVIEW = 160
@@ -66,6 +74,7 @@ class Trial:
 
     host: str = ""
     url: str = ""
+    query: Optional[str] = None
     ok: bool = False
     findings: List[Finding] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -98,22 +107,20 @@ def _count(value: Any) -> Optional[int]:
     return len(value) if isinstance(value, list) else None
 
 
-def run_trial(
-    path: Path,
-    url: str,
-    fetcher: Fetcher,
-    root: Optional[Path] = None,
-    sample: int = 3,
-    toc_pages: Optional[int] = None,
-) -> Trial:
-    """Read the spec at *path*, crawl *url* with it, and report field by field."""
-    path = Path(path)
-    root = Path(root) if root else path.parent.parent
-    text = path.read_text(encoding="utf-8")
-    lines = line_map(text)
-    name = path.name
+def _read_spec(trial: Trial, path: Path, root: Path) -> Optional[SourceSpec]:
+    """The resolved spec, or None with the reason recorded on *trial*."""
+    try:
+        document = parse_yaml(path.read_text(encoding="utf-8"))
+        return SourceSpec.model_validate(resolve_document(document, root=root, origin=path))
+    except Exception as error:
+        trial.error = str(error)
+        return None
 
-    trial = Trial(host=path.stem, url=url)
+
+def _noter(trial: Trial, path: Path) -> Any:
+    """A `note` bound to one trial, stamping every finding with its file and line."""
+    lines = line_map(path.read_text(encoding="utf-8"))
+    name = path.name
 
     def note(
         field_name: str,
@@ -133,11 +140,58 @@ def run_trial(
             line=locate(lines, field_name),
         )
 
-    try:
-        document = parse_yaml(text)
-        spec = SourceSpec.model_validate(resolve_document(document, root=root, origin=path))
-    except Exception as error:
-        trial.error = str(error)
+    return note
+
+
+def _settle(trial: Trial, report: Report) -> Trial:
+    _carry(trial, report)
+    trial.ok = trial.error is None and all(f.ok for f in trial.findings if f.required)
+    return trial
+
+
+def run_search_trial(
+    path: Path,
+    query: str,
+    fetcher: Fetcher,
+    root: Optional[Path] = None,
+) -> Trial:
+    """Search the host at *path* for *query* and report what came back.
+
+    Its own entry point rather than a flag on `run_trial`, because a search needs a spec and a
+    query and nothing else. Nothing else in this package reaches a search stage at all, so one
+    that answers nothing is indistinguishable from a host with no results until this is run.
+    """
+    path = Path(path)
+    root = Path(root) if root else path.parent.parent
+    trial = Trial(host=path.stem, query=query)
+
+    spec = _read_spec(trial, path, root)
+    if spec is None:
+        return trial
+
+    report = Report()
+    interpreter = Interpreter.load(spec, fetcher, root=root, report=report)
+    _note_search(interpreter, spec, query, _noter(trial, path), report)
+    return _settle(trial, report)
+
+
+def run_trial(
+    path: Path,
+    url: str,
+    fetcher: Fetcher,
+    root: Optional[Path] = None,
+    sample: int = 3,
+    toc_pages: Optional[int] = None,
+) -> Trial:
+    """Read the spec at *path*, crawl *url* with it, and report field by field."""
+    path = Path(path)
+    root = Path(root) if root else path.parent.parent
+
+    trial = Trial(host=path.stem, url=url)
+    note = _noter(trial, path)
+
+    spec = _read_spec(trial, path, root)
+    if spec is None:
         return trial
 
     report = Report()
@@ -168,10 +222,8 @@ def run_trial(
     for chapter in _sample(novel, sample):
         trial.sampled.append(_try_chapter(interpreter, novel, chapter, note))
 
-    _carry(trial, report)
     trial.summary = summarise(novel, trial.sampled)
-    trial.ok = trial.error is None and all(f.ok for f in trial.findings if f.required)
-    return trial
+    return _settle(trial, report)
 
 
 #: What a fixture stores and compares.
@@ -192,6 +244,39 @@ def summarise(novel: Novel, sampled: List[Dict[str, Any]]) -> Dict[str, Any]:
     summary["last_chapter"] = novel.chapters[-1].title if novel.chapters else ""
     summary["bodies"] = [{"id": s.get("id"), "characters": s.get("characters", 0)} for s in sampled]
     return summary
+
+
+def _note_search(
+    interpreter: Interpreter, spec: SourceSpec, query: str, note: Any, report: Report
+) -> None:
+    """Search for *query* and report what came back.
+
+    A source with no search stage is not a failure: most have none, and `can_search` already
+    reports that. Zero results for a query the host does have is the finding worth catching, and
+    it is why this is a required field once a search stage resolves.
+
+    The warning goes on the report rather than straight onto the trial, because `_carry` replaces
+    the trial's list wholesale on the way out.
+    """
+    if spec.search is None:
+        report.warn("no search stage: --search had nothing to run")
+        return
+
+    try:
+        results = interpreter.search(query)
+    except CrawlError as error:
+        note(error.field, False, str(error).split(": ", 1)[-1])
+        return
+    except Exception as error:
+        note("search.items", False, f"{type(error).__name__}: {error}")
+        return
+
+    note(
+        "search.items",
+        bool(results),
+        f"{len(results)} results for {query!r}",
+        [result.title for result in results[:3]],
+    )
 
 
 def _note_novel(note: Any, novel: Novel) -> None:
@@ -265,7 +350,8 @@ def _carry(trial: Trial, report: Report) -> None:
 
 def format_trial(trial: Trial) -> str:
     """The human-readable form. A reviewer reads this first."""
-    out: List[str] = [f"{trial.host}  {trial.url}", ""]
+    subject = trial.url or f"search {trial.query!r}"
+    out: List[str] = [f"{trial.host}  {subject}", ""]
 
     for finding in trial.findings:
         mark = "ok  " if finding.ok else ("FAIL" if finding.required else "none")
@@ -274,19 +360,24 @@ def format_trial(trial: Trial) -> str:
         if finding.preview:
             out.append(f"          {finding.preview}")
 
-    out.append("")
-    out.append(f"  {trial.chapters} chapters in {trial.volumes} volume(s)")
+    tail: List[str] = []
+    if trial.url:
+        tail.append(f"  {trial.chapters} chapters in {trial.volumes} volume(s)")
 
     for stage, count in sorted(trial.skipped.items()):
         if count:
             # A large number means the selector is wrong even though the crawl succeeded.
-            out.append(f"  {count} row(s) skipped in {stage}: check the selector")
+            tail.append(f"  {count} row(s) skipped in {stage}: check the selector")
 
     for stage in trial.truncated:
-        out.append(f"  {stage} was truncated by a limit")
+        tail.append(f"  {stage} was truncated by a limit")
 
     for warning in trial.warnings:
-        out.append(f"  warning: {warning}")
+        tail.append(f"  warning: {warning}")
+
+    if tail:
+        out.append("")
+        out.extend(tail)
 
     if trial.error:
         out.append("")
@@ -295,5 +386,9 @@ def format_trial(trial: Trial) -> str:
     out.append("")
     out.append("  PASSED" if trial.ok else "  FAILED")
     out.append("")
-    out.append("  Read the chapter titles before believing the count, and read one body.")
+    out.append(
+        "  Read the result titles before believing the count."
+        if not trial.url
+        else "  Read the chapter titles before believing the count, and read one body."
+    )
     return "\n".join(out)

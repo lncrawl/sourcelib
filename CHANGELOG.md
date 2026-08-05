@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-08-05
+
+### Added
+
+- `try-search`, running a spec's search stage against a live query. Takes a path and a query, no novel URL.
+
+### Fixed
+
+- `json` with `css` on one item list parses, then selects. It selected first and found nothing.
+
 ## [0.1.5] - 2026-08-05
 
 ### Added
@@ -92,6 +102,7 @@ First release. Implements [RFC-0001](docs/0001-source-definition.md) at `spec: 1
 - IDNA2008 is required, not the standard library's codec.
 - Fetching is an extra. A base install validates, resolves and transforms with no HTTP stack.
 
+[0.1.6]: https://github.com/lncrawl/sourcelib/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/lncrawl/sourcelib/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/lncrawl/sourcelib/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/lncrawl/sourcelib/compare/v0.1.2...v0.1.3

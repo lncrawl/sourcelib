@@ -11,7 +11,7 @@ import pytest
 from sourcelib.fetch import RecordedFetcher
 from sourcelib.models import Chapter, Novel
 from sourcelib.spec.lines import line_map, locate
-from sourcelib.trial import _sample, format_trial, run_trial
+from sourcelib.trial import _sample, format_trial, run_search_trial, run_trial
 
 SPEC_YAML = """spec: 1
 base_url: https://e.test/
@@ -140,6 +140,72 @@ class TestChapterSampling:
 
     def test_each_sample_reports_its_size(self, repo, site):
         assert all(s["characters"] > 0 for s in run(repo, site).sampled)
+
+
+class TestSearch:
+    """`try-search` is the only thing in this package that reaches a search stage."""
+
+    SEARCHING = (
+        SPEC_YAML
+        + """search:
+  request: { get: "{origin}/find?q={query}" }
+  json: resultview
+  css: .novel-item a
+  fields:
+    title: { css: .novel-title }
+    url: { attr: href }
+"""
+    )
+
+    RESULTS = json.dumps(
+        {
+            "resultview": '<div class="novel-item">'
+            '<a href="/novel/x"><h4 class="novel-title">Reborn</h4></a></div>'
+        }
+    )
+
+    @pytest.fixture
+    def searchable(self, tmp_path):
+        (tmp_path / "specs").mkdir()
+        (tmp_path / "specs" / "e.test.yaml").write_text(self.SEARCHING, encoding="utf-8")
+        return tmp_path
+
+    @pytest.fixture
+    def site(self):
+        pages = {"https://e.test/novel/x": NOVEL, "https://e.test/find?q=reborn": self.RESULTS}
+        pages.update({f"https://e.test/c/{n}": BODY for n in range(1, 6)})
+        return RecordedFetcher(pages)
+
+    def search(self, repo, site, query="reborn"):
+        return run_search_trial(repo / "specs" / "e.test.yaml", query, site, repo)
+
+    def test_it_reports_what_search_returned(self, searchable, site):
+        trial = self.search(searchable, site)
+        found = next(f for f in trial.findings if f.field == "search.items")
+        assert found.ok is True and "1 results" in found.detail
+        assert trial.query == "reborn"
+
+    def test_a_search_that_answers_nothing_fails_the_trial(self, searchable):
+        empty = {"https://e.test/novel/x": NOVEL, "https://e.test/find?q=reborn": "{}"}
+        empty.update({f"https://e.test/c/{n}": BODY for n in range(1, 6)})
+        trial = self.search(searchable, RecordedFetcher(empty))
+        assert trial.ok is False
+        assert next(f for f in trial.findings if f.field == "search.items").ok is False
+
+    def test_a_plain_trial_never_touches_search(self, searchable, site):
+        trial = run(searchable, site)
+        assert not any(f.field == "search.items" for f in trial.findings)
+        assert ("GET", "https://e.test/find?q=reborn") not in site.calls
+
+    def test_it_needs_no_novel_url(self, searchable, site):
+        trial = self.search(searchable, site)
+        assert trial.url == "" and trial.chapters == 0
+        assert "https://e.test/novel/x" not in [url for _, url in site.calls]
+
+    def test_a_spec_with_no_search_stage_warns_rather_than_fails(self, repo, site):
+        trial = self.search(repo, site)
+        assert trial.ok is True
+        assert any("no search stage" in w for w in trial.warnings)
 
 
 class TestFailure:

@@ -445,12 +445,17 @@ class Interpreter:
                 kinds=_KINDS,
                 pipes=self.spec.pipes,
                 start=len(rows),
+                parser=self.spec.parser or DEFAULT_PARSER,
             )
             if skipped:
                 self.report.skipped["toc"] = self.report.skipped.get("toc", 0) + skipped
             if stage.volumes is not None:
                 heading_rows, _ = read_rows(
-                    stage.volumes, page, kinds=_KINDS, pipes=self.spec.pipes
+                    stage.volumes,
+                    page,
+                    kinds=_KINDS,
+                    pipes=self.spec.pipes,
+                    parser=self.spec.parser or DEFAULT_PARSER,
                 )
                 found = assign_volumes(page, stage.items, stage.volumes, page_rows, heading_rows)
                 offset = max(titles) if titles else 0
@@ -495,7 +500,12 @@ class Interpreter:
 
     def _rows(self, item_list: ItemList, document: Document, required):
         return read_rows(
-            item_list, document, required=required, kinds=_KINDS, pipes=self.spec.pipes
+            item_list,
+            document,
+            required=required,
+            kinds=_KINDS,
+            pipes=self.spec.pipes,
+            parser=self.spec.parser or DEFAULT_PARSER,
         )
 
     def _hooked_toc(self, novel: Novel, url: str, stage: Any) -> None:

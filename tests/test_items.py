@@ -145,6 +145,60 @@ class TestJsonRows:
         assert rows[0].get("url") == "https://e.test/c/5"
 
 
+class TestParseThenSelect:
+    """`json` with `css` on one list: the path names markup, the selector runs inside it."""
+
+    FRAGMENT = (
+        '<div class="novel-list">'
+        '<div class="novel-item"><a href="/n/one"><h4 class="novel-title">One</h4></a></div>'
+        '<div class="novel-item"><a href="/n/two"><h4 class="novel-title">Two</h4></a></div>'
+        "</div>"
+    )
+
+    def spec(self):
+        return items(
+            json="resultview",
+            css=".novel-list .novel-item a",
+            fields={"title": {"css": ".novel-title"}, "url": {"attr": "href"}},
+        )
+
+    def test_a_fragment_inside_a_json_field(self):
+        document = Document.from_json({"resultview": self.FRAGMENT}, url="https://e.test/search")
+        rows, _ = read_rows(self.spec(), document, required=("url",))
+        assert [r.get("title") for r in rows] == ["One", "Two"]
+        assert rows[0].get("url") == "/n/one"
+
+    def test_a_list_of_fragments_selects_across_all_of_them(self):
+        document = Document.from_json(
+            {"resultview": ['<div class="novel-item"><a href="/n/a">A</a></div>', self.FRAGMENT]},
+            url="https://e.test/search",
+        )
+        rows, _ = read_rows(
+            items(json="resultview", css=".novel-item a", fields={"url": {"attr": "href"}}),
+            document,
+            required=("url",),
+        )
+        assert [r.get("url") for r in rows] == ["/n/a", "/n/one", "/n/two"]
+
+    def test_the_spec_parser_is_used(self):
+        document = Document.from_json({"resultview": self.FRAGMENT}, url="https://e.test/search")
+        rows, _ = read_rows(self.spec(), document, required=("url",), parser="html.parser")
+        assert [r.get("title") for r in rows] == ["One", "Two"]
+
+    def test_a_path_that_holds_no_markup_yields_no_rows(self):
+        document = Document.from_json({"resultview": {"not": "markup"}}, url="https://e.test/s")
+        rows, _ = read_rows(self.spec(), document, required=("url",))
+        assert rows == []
+
+    def test_css_alone_still_reads_an_html_document(self, toc):
+        rows, _ = read_rows(
+            items(css="ul.list li", fields={"url": {"css": "a", "attr": "href"}}),
+            toc,
+            required=("url",),
+        )
+        assert len(rows) == 2
+
+
 class TestSorting:
     def test_sort_by_is_numeric(self):
         document = Document.from_html(

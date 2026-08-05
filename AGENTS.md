@@ -52,6 +52,7 @@ The CLI runs from the checkout, with the extra for anything that reaches a site:
 
 ```bash
 uv run --extra fetch sourcelib try <spec> <novel-url>
+uv run --extra fetch sourcelib try-search <spec> "<query>"
 uv run --extra fetch sourcelib explain <url>
 ```
 
