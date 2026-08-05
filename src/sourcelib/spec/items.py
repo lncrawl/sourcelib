@@ -20,7 +20,13 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from bs4 import Tag
 
 from sourcelib.interpolate import render
-from sourcelib.spec.extract import DEFAULT_PARSER, Document, extract, read_json_path
+from sourcelib.spec.extract import (
+    DEFAULT_PARSER,
+    Document,
+    extract,
+    read_json_path,
+    render_const,
+)
 from sourcelib.spec.model import Extractor, ItemList
 
 __all__ = ["Row", "assign_volumes", "group_by_size", "read_items", "read_rows"]
@@ -88,6 +94,7 @@ def read_rows(
     pipes: Optional[Mapping[str, Any]] = None,
     start: int = 0,
     parser: str = DEFAULT_PARSER,
+    context: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[List[Row], int]:
     """Every row *item_list* yields, and how many were skipped.
 
@@ -109,7 +116,7 @@ def read_rows(
         fields: Dict[str, Any] = {}
         for name, spec in item_list.fields.items():
             fields[name] = _read_field(
-                spec, document, scope, json_scope, name, kinds, pipes, fields
+                spec, document, scope, json_scope, name, kinds, pipes, fields, context
             )
 
         if any(_is_blank(fields.get(name)) for name in needed):
@@ -130,17 +137,27 @@ def _read_field(
     kinds: Mapping[str, str],
     pipes: Optional[Mapping[str, Any]],
     so_far: Mapping[str, Any],
+    context: Optional[Mapping[str, Any]] = None,
 ) -> Any:
     """One field of one row. A string field is a template over its earlier siblings."""
+    row_context = {
+        **dict(context or {}),
+        "origin": (context or {}).get("origin") or _origin_of(document),
+        "item": dict(so_far),
+    }
+    row_context.setdefault("vars", {})
+
     if isinstance(spec, str):
         # Fields are evaluated in declaration order, so a template may name any field
         # declared before it.
-        return render(spec, {"origin": _origin_of(document), "item": dict(so_far), "vars": {}})
+        return render(spec, row_context)
 
     if json_scope is not None:
-        return _read_json_field(spec, json_scope, document, name, kinds, pipes)
+        return _read_json_field(spec, json_scope, document, name, kinds, pipes, row_context)
 
-    return extract(spec, document, scope=scope, kind=kinds.get(name), pipes=pipes)
+    return extract(
+        spec, document, scope=scope, kind=kinds.get(name), pipes=pipes, context=row_context
+    )
 
 
 def _read_json_field(
@@ -150,12 +167,13 @@ def _read_json_field(
     name: str,
     kinds: Mapping[str, str],
     pipes: Optional[Mapping[str, Any]],
+    context: Optional[Mapping[str, Any]] = None,
 ) -> Any:
     """A row that is a JSON object rather than an element."""
     if spec.json_ is not None:
         value: Any = read_json_path(row, spec.json_)
     elif spec.const is not None:
-        value = spec.const
+        value = render_const(spec.const, context) if context is not None else spec.const
     else:
         value = row
     inner = Document.from_json(value, url=document.url, headers=document.headers)
@@ -265,9 +283,12 @@ def read_items(
     kinds: Optional[Mapping[str, str]] = None,
     pipes: Optional[Mapping[str, Any]] = None,
     parser: str = DEFAULT_PARSER,
+    context: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[List[Row], int]:
     """Rows, sorted and reversed as declared. Sorting runs after volume assignment."""
-    rows, skipped = read_rows(item_list, document, required, kinds, pipes, parser=parser)
+    rows, skipped = read_rows(
+        item_list, document, required, kinds, pipes, parser=parser, context=context
+    )
     return sort_rows(rows, item_list), skipped
 
 

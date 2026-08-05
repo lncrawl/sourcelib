@@ -161,6 +161,8 @@ class Interpreter:
         self.report = report or Report()
         self.origin = _origin_of(spec)
         self.documents: Dict[str, Document] = {}
+        #: The render context each stage's request ran with, kept for `const`.
+        self._contexts: Dict[str, Dict[str, Any]] = {}
         self.fetcher = fetcher
         self.vars = VarCache(spec.vars, self.origin, self._fetch_for_var)
         self.hooks = dict(hooks or {})
@@ -220,6 +222,15 @@ class Interpreter:
         base.update({k: v for k, v in extra.items() if v is not None})
         return base
 
+    def _context_of(self, stage: str) -> Dict[str, Any]:
+        """What a `const` in *stage* renders against: the context that stage's request used.
+
+        Kept from the request rather than rebuilt, so the placeholders a field may name are
+        exactly the ones section 4.2 puts in scope there, with no second definition of what is
+        available where.
+        """
+        return dict(self._contexts.get(stage) or self.context())
+
     def _fetch_for_var(self, request: Any) -> Document:
         return run_request(
             request,
@@ -239,6 +250,9 @@ class Interpreter:
         yields: Optional[Callable[[Document], bool]] = None,
         **ctx: Any,
     ):
+        context = self.context(**ctx)
+        self._contexts[stage] = context
+
         function, hook_ctx = self._hook(f"{stage}.request")
         if function is not None:
             # A request hook replaces the whole fetch, which is how a site speaking a protocol
@@ -248,7 +262,7 @@ class Interpreter:
             document = run_request(
                 request,
                 self.fetcher,
-                self.context(**ctx),
+                context,
                 cache=self.documents,
                 default_url=default_url,
                 parser=self.spec.parser or DEFAULT_PARSER,
@@ -269,7 +283,7 @@ class Interpreter:
             return []
 
         def count_items(document: Document) -> int:
-            return len(self._rows(stage, document, ("url",))[0])
+            return len(self._rows(stage, document, ("url",), "search")[0])
 
         def has_items(document: Document) -> bool:
             return count_items(document) > 0
@@ -288,7 +302,7 @@ class Interpreter:
 
         collected: List[Mapping[str, Any]] = []
         for page in pages:
-            rows, skipped = self._rows(stage, page, ("url",))
+            rows, skipped = self._rows(stage, page, ("url",), "search")
             if skipped:
                 self.report.skipped["search"] = self.report.skipped.get("search", 0) + skipped
             collected.extend(row.fields for row in rows)
@@ -354,7 +368,13 @@ class Interpreter:
     def _read_field(self, stage: Any, name: str, document: Document) -> Any:
         declared = getattr(stage, name, None) if stage else None
         if declared is not None:
-            value = extract(declared, document, kind=_KINDS.get(name), pipes=self.spec.pipes)
+            value = extract(
+                declared,
+                document,
+                kind=_KINDS.get(name),
+                pipes=self.spec.pipes,
+                context=self._context_of("novel"),
+            )
             if not _blank(value):
                 return value
 
@@ -394,7 +414,9 @@ class Interpreter:
 
         declared = getattr(stage, "language", None) if stage else None
         if declared is not None:
-            value = extract(declared, document, pipes=self.spec.pipes)
+            value = extract(
+                declared, document, pipes=self.spec.pipes, context=self._context_of("novel")
+            )
             if isinstance(value, str) and value.strip():
                 return value.strip().lower()
 
@@ -446,6 +468,7 @@ class Interpreter:
                 pipes=self.spec.pipes,
                 start=len(rows),
                 parser=self.spec.parser or DEFAULT_PARSER,
+                context=self._context_of("toc"),
             )
             if skipped:
                 self.report.skipped["toc"] = self.report.skipped.get("toc", 0) + skipped
@@ -456,6 +479,7 @@ class Interpreter:
                     kinds=_KINDS,
                     pipes=self.spec.pipes,
                     parser=self.spec.parser or DEFAULT_PARSER,
+                    context=self._context_of("toc"),
                 )
                 found = assign_volumes(page, stage.items, stage.volumes, page_rows, heading_rows)
                 offset = max(titles) if titles else 0
@@ -498,7 +522,7 @@ class Interpreter:
             )
         novel.volumes = [seen[key] for key in sorted(seen)]
 
-    def _rows(self, item_list: ItemList, document: Document, required):
+    def _rows(self, item_list: ItemList, document: Document, required, stage: str = "toc"):
         return read_rows(
             item_list,
             document,
@@ -506,6 +530,7 @@ class Interpreter:
             kinds=_KINDS,
             pipes=self.spec.pipes,
             parser=self.spec.parser or DEFAULT_PARSER,
+            context=self._context_of(stage),
         )
 
     def _hooked_toc(self, novel: Novel, url: str, stage: Any) -> None:
@@ -599,7 +624,13 @@ class Interpreter:
         parts = []
         for page in pages:
             raw = (
-                extract(stage.body, page, kind="body", pipes=self.spec.pipes)
+                extract(
+                    stage.body,
+                    page,
+                    kind="body",
+                    pipes=self.spec.pipes,
+                    context=self._context_of("chapter"),
+                )
                 if stage.body is not None
                 else None
             )
@@ -641,7 +672,15 @@ class Interpreter:
         document = self.documents.get("toc")
         if document is None:
             return chapter.url
-        return _text(extract(stage.url, document, kind="url", pipes=self.spec.pipes))
+        return _text(
+            extract(
+                stage.url,
+                document,
+                kind="url",
+                pipes=self.spec.pipes,
+                context=self._context_of("chapter"),
+            )
+        )
 
 
 # -- helpers -------------------------------------------------------------------------- #

@@ -8,7 +8,14 @@ import pytest
 from pydantic import ValidationError
 
 from sourcelib.spec.loader import load_document
-from sourcelib.spec.model import Extractor, Paginate, Request, SourceSpec, hook_points
+from sourcelib.spec.model import (
+    Extractor,
+    Paginate,
+    Request,
+    SourceSpec,
+    Var,
+    hook_points,
+)
 
 MINIMAL = {"spec": 1, "base_url": "https://example.com/"}
 
@@ -317,3 +324,16 @@ class TestPaginateStep:
             {"last": 500, "step": 100, "url": "https://e/?start={page}"}
         )
         assert paginate.runs_concurrently is True
+
+
+class TestVarConst:
+    def test_a_var_const_cannot_name_another_var(self):
+        with pytest.raises(ValidationError, match="cannot name another var"):
+            Var.model_validate({"on": "url", "const": "{vars.other}/x"})
+
+    def test_the_rule_reaches_inside_a_list(self):
+        with pytest.raises(ValidationError, match="cannot name another var"):
+            Var.model_validate({"on": "url", "const": ["fine", "{vars.other}"]})
+
+    def test_any_other_placeholder_is_allowed(self):
+        assert Var.model_validate({"on": "url", "const": "{origin}/api"}).const == "{origin}/api"

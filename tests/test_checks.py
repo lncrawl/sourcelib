@@ -330,3 +330,94 @@ class TestRequireNamesAField:
             }
         )
         assert "search.require" in found
+
+
+class TestTemplatesAreChecked:
+    """Section 4.2: both sets are closed, and a name out of scope is a load-time error.
+
+    Nothing called the validator, so all three of these passed `check` and were discovered by a
+    crawl fetching the wrong page.
+    """
+
+    def test_an_unknown_placeholder_is_refused(self):
+        assert "toc.request.get" in problems(
+            toc={"request": {"get": "{origin}/{novel_titel}"}, "items": {"css": "a"}}
+        )
+
+    def test_an_unknown_filter_is_refused(self):
+        assert "search.request.get" in problems(
+            search={"request": {"get": "{origin}/s?q={query|urlencodee}"}, "css": "a"}
+        )
+
+    def test_a_placeholder_out_of_its_stage_is_refused(self):
+        found = problems(toc={"request": {"get": "{origin}/s?q={query}"}, "items": {"css": "a"}})
+        assert "toc.request.get" in found
+
+    def test_query_is_legal_in_a_search_request(self):
+        assert (
+            problems(
+                search={"request": {"get": "{origin}/s?q={query|urlencode}"}, "css": "a"},
+            )
+            == []
+        )
+
+    def test_page_is_legal_only_inside_a_paginate_url(self):
+        paged = {
+            "request": {
+                "page": "novel",
+                "paginate": {"last": 5, "url": "{novel_url}/page-{page}"},
+            },
+            "items": {"css": "a"},
+        }
+        assert problems(toc=paged) == []
+        assert "toc.request.get" in problems(
+            toc={"request": {"get": "{origin}/{page}"}, "items": {"css": "a"}}
+        )
+
+    def test_item_is_legal_only_inside_an_item_list(self):
+        assert (
+            problems(
+                toc={
+                    "request": {"page": "novel"},
+                    "items": {
+                        "css": "a",
+                        "fields": {"cid": {"attr": "data-id"}, "url": "{origin}/c/{item.cid}"},
+                    },
+                }
+            )
+            == []
+        )
+        assert "novel.title.const" in problems(novel={"title": {"const": "{item.cid}"}})
+
+    def test_a_const_is_a_template(self):
+        assert "novel.title.const" in problems(novel={"title": {"const": "{vars.nope|nofilter}"}})
+        assert (
+            problems(
+                vars={"slug": {"on": "url", "regex": "/novel/([^/]+)"}},
+                novel={"title": {"const": "{vars.slug}"}},
+            )
+            == []
+        )
+
+    def test_a_fallback_const_is_checked(self):
+        assert "novel.title.fallback[0].const" in problems(
+            novel={"title": {"css": "h1", "fallback": [{"const": "{nothing}"}]}}
+        )
+
+    def test_headers_may_only_name_what_resolves_everywhere(self):
+        assert "headers.Referer" in problems(headers={"Referer": "{novel_url}"})
+        assert problems(headers={"Referer": "{origin}/"}) == []
+
+    def test_a_payload_and_a_request_header_are_checked(self):
+        found = problems(
+            search={
+                "request": {
+                    "post": "{origin}/s",
+                    "payload": {"q": "{quer}"},
+                    "headers": {"X-Token": "{vars.absent|nope}"},
+                },
+                "css": "a",
+            }
+        )
+        assert "search.request.payload.q" in found
+        assert "search.request.headers.X-Token" in found

@@ -24,12 +24,10 @@ evidence accumulates instead of being re-derived.
 
 Counting the *shapes* separately rather than the symptom is what makes the rule work. "Offset
 pagination" looked like one gap across 26 hosts. Separating them showed 18 were merely numbered from
-zero, which `paginate.first` covers; 7 paged by an offset that advances by what arrived, now
-`paginate.by: items`; and 1 asked for a start-and-end range over a known total, which is a third
-mechanism and stayed a hook at one host. One vague count would have argued for one vague feature.
-
-The residue is what to check a new request against: a start-and-end range (1 host), and interpolating
-a var into a step argument, which is what still keeps the Blogger hook from disappearing entirely.
+zero, which `paginate.first` covers; 7 paged by an offset that advances by what arrived, which
+`paginate.step` describes wherever the host serves the page size it was asked for; and 1 asked for a
+start-and-end range over a known total, which is a third mechanism and stayed a hook at one host. One
+vague count would have argued for one vague feature.
 
 Three rules hold the line and none is negotiable for convenience:
 

@@ -330,6 +330,16 @@ class Var(Extractor):
     )
 
     @model_validator(mode="after")
+    def _check_const(self) -> "Var":
+        # A var's `const` is interpolated like any other, but naming a var from inside one makes
+        # a var depend on a var, and the cache has no order to evaluate that in: the second could
+        # be the first's own value one crawl and stale the next.
+        for text in [self.const] if isinstance(self.const, str) else self.const or []:
+            if isinstance(text, str) and "{vars." in text:
+                raise ValueError("a var's const cannot name another var")
+        return self
+
+    @model_validator(mode="after")
     def _check_own_request(self) -> "Var":
         # A session-scoped var outlives every per-novel and per-chapter placeholder, and
         # may be evaluated while the document that would satisfy `page` is still being

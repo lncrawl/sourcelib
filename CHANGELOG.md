@@ -11,6 +11,12 @@ All notable changes to this project are documented here. The format is based on 
 ### Fixed
 
 - `json` with `css` on one item list parses, then selects. It selected first and found nothing.
+- `const` is interpolated, as section 3.4 has always said, so a field can be produced from `vars` alone.
+- Templates are validated at load time. An unknown placeholder, an unknown filter and a placeholder used outside its stage all passed `check` and were found by a crawl.
+
+### Changed
+
+- A var's `const` may not name another var, and is refused at load time. RFC-0001 section 3.5.
 
 ## [0.1.5] - 2026-08-05
 

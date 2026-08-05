@@ -11,7 +11,8 @@ from typing import AbstractSet, Any, Dict, Iterator, List, Optional, Tuple
 
 from pydantic import BaseModel
 
-from sourcelib.spec.model import SourceSpec
+from sourcelib.interpolate import TemplateError, allowed_roots, validate_template
+from sourcelib.spec.model import STAGE_FIELDS, Extractor, ItemList, Request, SourceSpec
 from sourcelib.transform import ANY, LIST, StepError, expand_pipe, validate_pipe
 
 __all__ = ["Problem", "check_resolved", "derived_capabilities"]
@@ -77,6 +78,7 @@ def check_resolved(spec: SourceSpec) -> List[Problem]:
     problems.extend(_check_claims(spec))
     problems.extend(_check_page_order(spec))
     problems.extend(_check_pipes(spec))
+    problems.extend(_check_templates(spec))
     problems.extend(_check_require(spec))
     return problems
 
@@ -177,6 +179,124 @@ def _check_one_pipe(
     except StepError as error:
         return [Problem(where, str(error))]
     return []
+
+
+def _templates_of_request(request: Any, path: str, stage: str) -> Iterator[Tuple[str, str, Any]]:
+    """Every template a request carries, with the roots legal at its position."""
+    roots = allowed_roots(stage)
+    for name in ("get", "post"):
+        value = getattr(request, name, None)
+        if isinstance(value, str):
+            yield f"{path}.{name}", value, roots
+    for name, value in (getattr(request, "payload", None) or {}).items():
+        if isinstance(value, str):
+            yield f"{path}.payload.{name}", value, roots
+    for name, value in (getattr(request, "headers", None) or {}).items():
+        if isinstance(value, str):
+            yield f"{path}.headers.{name}", value, roots
+
+    paginate = getattr(request, "paginate", None)
+    if paginate is not None:
+        if isinstance(paginate.url, str):
+            # A later page is addressed from the one already fetched, so `page` and `request_url`
+            # are in scope here and nowhere else.
+            yield f"{path}.paginate.url", paginate.url, allowed_roots(stage, in_paginate=True)
+        for name in ("first", "last", "next"):
+            value = getattr(paginate, name, None)
+            if isinstance(value, Extractor):
+                yield from _templates_of_extractor(value, f"{path}.paginate.{name}", roots)
+
+    for index, alternative in enumerate(getattr(request, "from_", None) or ()):
+        yield from _templates_of_request(alternative, f"{path}.from[{index}]", stage)
+
+
+def _templates_of_extractor(
+    extractor: Any, path: str, roots: AbstractSet[str]
+) -> Iterator[Tuple[str, str, Any]]:
+    """A `const` is a template (section 3.4), and `fallback` holds whole extractors."""
+    const = getattr(extractor, "const", None)
+    for suffix, text in _strings_of(const):
+        yield f"{path}.const{suffix}", text, roots
+    for index, alternative in enumerate(getattr(extractor, "fallback", None) or ()):
+        yield from _templates_of_extractor(alternative, f"{path}.fallback[{index}]", roots)
+
+
+def _strings_of(const: Any) -> Iterator[Tuple[str, str]]:
+    if isinstance(const, str):
+        yield "", const
+    elif isinstance(const, list):
+        for index, item in enumerate(const):
+            if isinstance(item, str):
+                yield f"[{index}]", item
+
+
+def _templates_of_item_list(
+    item_list: Any, path: str, stage: str
+) -> Iterator[Tuple[str, str, Any]]:
+    roots = allowed_roots(stage, in_item=True)
+    for name, field in (getattr(item_list, "fields", None) or {}).items():
+        where = f"{path}.fields.{name}"
+        if isinstance(field, str):
+            yield where, field, roots
+        else:
+            yield from _templates_of_extractor(field, where, roots)
+
+
+def _templates_in(spec: SourceSpec) -> Iterator[Tuple[str, str, Any]]:
+    """Every template in a resolved spec, each with the placeholder roots legal where it sits."""
+    # Spec-level headers are sent by every request, in every stage, so only what resolves
+    # everywhere may appear in one.
+    session = allowed_roots("var")
+    for name, value in (spec.headers or {}).items():
+        yield f"headers.{name}", value, session
+
+    for name, var in (spec.vars or {}).items():
+        yield from _templates_of_extractor(var, f"vars.{name}", session)
+        if isinstance(var.on, Request):
+            yield from _templates_of_request(var.on, f"vars.{name}.on", "var")
+
+    for stage_name in _STAGE_ORDER:
+        stage = getattr(spec, stage_name, None)
+        if stage is None:
+            continue
+
+        request = getattr(stage, "request", None)
+        if request is not None:
+            yield from _templates_of_request(request, f"{stage_name}.request", stage_name)
+
+        if stage_name == "search":
+            yield from _templates_of_item_list(stage, stage_name, stage_name)
+            continue
+
+        for field_name in STAGE_FIELDS[stage_name]:
+            value = getattr(stage, field_name, None)
+            if value is None:
+                continue
+            where = f"{stage_name}.{field_name}"
+            if isinstance(value, ItemList):
+                yield from _templates_of_item_list(value, where, stage_name)
+            elif isinstance(value, str):
+                # `chapter.url` may be a template rather than an extractor.
+                yield where, value, allowed_roots(stage_name)
+            else:
+                yield from _templates_of_extractor(value, where, allowed_roots(stage_name))
+
+
+def _check_templates(spec: SourceSpec) -> List[Problem]:
+    """Section 4.2: a template may only name a placeholder that resolves where it sits.
+
+    Both sets are closed, and the RFC makes an unknown or out-of-scope name a load-time error
+    rather than an empty string at crawl time. Nothing called the validator, so `{query}` in a toc
+    URL, a misspelled `{novel_titel}` and a filter that does not exist all passed `check` and
+    fetched a wrong page, or raised, once a crawl reached them.
+    """
+    problems: List[Problem] = []
+    for where, template, roots in _templates_in(spec):
+        try:
+            validate_template(template, roots)
+        except TemplateError as error:
+            problems.append(Problem(where, str(error)))
+    return problems
 
 
 #: The order stages run in (section 3.6), which is what makes a `page` reference resolvable.

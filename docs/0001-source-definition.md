@@ -317,6 +317,12 @@ blocking us.
 Without `renew` a stale var is an error, which is the right default. Retrying on every failure would
 mask a wrong selector behind repeated requests.
 
+**A var's `const` MUST NOT name another var.** A `const` is interpolated like any other template
+(§3.4), but a var reading `{vars.<other>}` makes one var depend on another, and the cache has no
+evaluation order to satisfy that in: the two are scoped to different lifetimes, so the value read
+could be current on one crawl and stale on the next. An implementation MUST refuse such a document
+at load time rather than resolve it in whatever order the mapping happens to iterate.
+
 ### 3.6 Request
 
 Everything about _making_ a request lives here. Everything about _reading_ the response lives on the

@@ -28,8 +28,8 @@ def page():
     return Document.from_html(PAGE, url="https://example.com/novel/thing")
 
 
-def read(page, kind=None, **fields):
-    return extract(Extractor.model_validate(fields), page, kind=kind)
+def read(page, kind=None, context=None, **fields):
+    return extract(Extractor.model_validate(fields), page, kind=kind, context=context)
 
 
 class TestReadJsonPath:
@@ -91,6 +91,29 @@ class TestSources:
 
     def test_a_const_needs_no_document(self, page):
         assert read(page, const="fixed") == "fixed"
+
+    def test_a_const_is_interpolated(self, page):
+        # Section 3.4: this is how a field is produced from vars alone when the page omits it.
+        context = {"origin": "https://example.com", "vars": {"slug": "thing"}}
+        assert read(page, const="{origin}/novel/{vars.slug}", context=context) == (
+            "https://example.com/novel/thing"
+        )
+
+    def test_a_const_list_is_interpolated_element_wise(self, page):
+        context = {"origin": "https://example.com", "vars": {}}
+        assert read(page, const=["{origin}/a", "{origin}/b"], context=context) == [
+            "https://example.com/a",
+            "https://example.com/b",
+        ]
+
+    def test_a_const_that_is_not_a_string_is_left_alone(self, page):
+        context = {"origin": "https://example.com", "vars": {}}
+        assert read(page, const=[], context=context) == []
+        assert read(page, const=7, context=context) == "7"
+
+    def test_a_const_is_verbatim_without_a_context(self, page):
+        # A caller with no crawl to read from, such as a page number off the first page.
+        assert read(page, const="{origin}/x") == "{origin}/x"
 
     def test_a_header_is_read_case_insensitively(self):
         document = Document.from_html("<html/>", headers={"X-WP-TotalPages": "12"})

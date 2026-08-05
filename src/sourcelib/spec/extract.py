@@ -15,6 +15,7 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup, Tag, XMLParsedAsHTMLWarning
 
+from sourcelib.interpolate import render
 from sourcelib.spec.model import Extractor
 from sourcelib.transform import DEFAULT_PARSER, REGISTRY, apply_pipe
 
@@ -25,6 +26,7 @@ __all__ = [
     "default_pipe",
     "extract",
     "read_json_path",
+    "render_const",
 ]
 
 #: Inline wrappers the body and synopsis defaults flatten. They carry no meaning in prose, and
@@ -296,16 +298,23 @@ def extract(
     scope: Any = None,
     kind: Optional[str] = None,
     pipes: Optional[Mapping[str, Any]] = None,
+    context: Optional[Mapping[str, Any]] = None,
 ) -> Any:
     """Evaluate *spec* against *document*, in the order section 4.1 fixes.
 
     ``source``, then ``all``, then ``attr``, then ``pipe``, then ``default``, then each
     ``fallback`` in turn. *kind* selects the default pipe and whether the value is a URL.
+
+    *context* is what a ``const`` renders against (section 3.4). Without it a ``const`` is
+    returned verbatim, which is right for a caller that has no crawl to read from, such as
+    reading a page number off the first page.
     """
     if isinstance(spec, str):
         raise ExtractError("a template-valued field is rendered, not extracted")
 
     value = _resolve_source(spec, document, scope)
+    if spec.const is not None and context is not None:
+        value = render_const(value, context)
 
     declared = spec.pipe
     if isinstance(declared, str):
@@ -333,13 +342,27 @@ def extract(
 
     if _is_empty(value):
         for alternative in spec.fallback:
-            value = extract(alternative, document, scope, kind, pipes)
+            value = extract(alternative, document, scope, kind, pipes, context)
             if not _is_empty(value):
                 break
 
     if kind in URL_FIELDS and document.url:
         value = _absolutise(value, document.url)
 
+    return value
+
+
+def render_const(value: Any, context: Mapping[str, Any]) -> Any:
+    """A `const` is a template, so `{vars.x}` in one produces a value the page never carried.
+
+    Element-wise over a list, because a constant list of URLs is the same case one item at a time.
+    Anything that is not a string is returned as it is: a number, a boolean and an empty list are
+    all legitimate constants with nothing to interpolate.
+    """
+    if isinstance(value, str):
+        return render(value, context)
+    if isinstance(value, list):
+        return [render(item, context) if isinstance(item, str) else item for item in value]
     return value
 
 
