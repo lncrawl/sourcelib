@@ -7,7 +7,7 @@ the adaptation: which arguments reach the layer below, and what comes back.
 import pytest
 
 from sourcelib.fetch import FetchError
-from sourcelib.http import ScraperFetcher, requires_scraper
+from sourcelib.http import ScraperFetcher, requires_scraper, solver
 
 
 class FakeResponse:
@@ -129,3 +129,43 @@ class TestMissingExtra:
         monkeypatch.setattr(builtins, "__import__", refuse)
         with pytest.raises(FetchError, match=r"lncrawl-sourcelib\[fetch\]"):
             requires_scraper()
+
+
+class TestBrowserSolver:
+    """A configured browser is what makes `render` and a challenged host reachable at all."""
+
+    def install(self, monkeypatch, chromium, solver_class):
+        import sys
+        from types import SimpleNamespace
+
+        # `from x import y` reads an attribute off whatever sys.modules holds, so a namespace
+        # stands in for the module without the extra being installed.
+        monkeypatch.setitem(
+            sys.modules, "scraper.browsers", SimpleNamespace(pick_chromium=lambda: chromium)
+        )
+        monkeypatch.setitem(sys.modules, "scraper.cdp", SimpleNamespace(CdpSolver=solver_class))
+
+    def test_a_machine_with_a_browser_gets_a_solver(self, monkeypatch):
+        class Solver:
+            pass
+
+        self.install(monkeypatch, "/usr/bin/chromium", Solver)
+        assert isinstance(solver(), Solver)
+
+    def test_no_browser_installed_is_not_an_error(self, monkeypatch):
+        self.install(monkeypatch, None, object)
+        # A browser is heavy and most runs never need one, so absent must not refuse to fetch.
+        assert solver() is None
+
+    def test_without_the_extra_it_is_absent(self, monkeypatch):
+        import builtins
+
+        real = builtins.__import__
+
+        def refuse(name, *args, **kwargs):
+            if name.startswith("scraper."):
+                raise ImportError(name)
+            return real(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", refuse)
+        assert solver() is None

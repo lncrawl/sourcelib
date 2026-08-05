@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format is based on 
 ### Added
 
 - `try-search`, running a spec's search stage against a live query. Takes a path and a query, no novel URL.
+- A browser solver is configured when the machine has one, so `request.render` works and a challenged host can be reached. Needs `lncrawl-scraper[cdp]` and a Chromium-family build; absent, nothing changes.
 
 ### Fixed
 
