@@ -396,3 +396,36 @@ class TestFeedMarkup:
         link = entry.select_one('link[rel="alternate"]')
         assert link is not None
         assert link.get("href") == "https://e/c/1"
+
+
+class TestExtractionDoesNotEditTheDocument:
+    """`page` makes stages share one document, so an extraction must not rewrite it.
+
+    Found on a live host: the synopsis pipe unwrapped and re-paragraphed the container its chapter
+    list sat inside, so `toc.items` matched 77 rows before that extraction and none after, and the
+    failure named the toc selector rather than the synopsis.
+    """
+
+    MARKUP = (
+        '<div class="summary"><p>Blurb <span>here</span>.</p>'
+        '<ul class="chapters"><li><a href="/c/1">One</a></li>'
+        '<li><a href="/c/2">Two</a></li></ul></div>'
+    )
+
+    def rows(self, document):
+        node = document.node
+        assert node is not None
+        return node.select("ul.chapters li a")
+
+    def test_a_node_pipe_leaves_the_tree_alone(self):
+        document = Document.from_html(self.MARKUP, url="https://e.test/n")
+        assert len(self.rows(document)) == 2
+        value = read(document, kind="synopsis", css=".summary")
+        assert "Blurb" in str(value)
+        assert len(self.rows(document)) == 2
+
+    def test_it_holds_for_a_list_of_nodes(self):
+        document = Document.from_html(self.MARKUP, url="https://e.test/n")
+        read(document, all=True, css=".summary", pipe=[{"unwrap": ["span"]}, "text"])
+        node = document.node
+        assert node is not None and node.select_one(".summary span") is not None

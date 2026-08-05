@@ -7,6 +7,7 @@ list-valued field with a text pipe means.
 
 from __future__ import annotations
 
+import copy
 import json as jsonlib
 import re
 import warnings
@@ -335,7 +336,7 @@ def extract(
     steps = declared if declared is not None else default_pipe(kind, _looks_like_text(value))
 
     if not _is_empty(value) or spec.const is not None:
-        value = apply_pipe(value, list(steps), dict(pipes or {}))
+        value = apply_pipe(_detached(value), list(steps), dict(pipes or {}))
 
     if _is_empty(value) and spec.default is not None:
         value = spec.default
@@ -349,6 +350,22 @@ def extract(
     if kind in URL_FIELDS and document.url:
         value = _absolutise(value, document.url)
 
+    return value
+
+
+def _detached(value: Any) -> Any:
+    """A copy of a selected element, so a mutating step cannot edit the document itself.
+
+    Several node steps rewrite in place: `unwrap`, `strip_tags`, `strip_css`, `drop_empty_nodes`.
+    Run over the document's own tree they change what every later stage reads, and `page` exists to
+    make stages share one document. Measured on one host: the synopsis pipe rewrote the container
+    its chapter list sits in, so `toc.items` matched 77 rows before that extraction and 0 after,
+    and reported the toc selector as the fault.
+    """
+    if isinstance(value, Tag):
+        return copy.copy(value)
+    if isinstance(value, list):
+        return [copy.copy(item) if isinstance(item, Tag) else item for item in value]
     return value
 
 

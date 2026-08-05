@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The format is based on 
 ### Fixed
 
 - `json` with `css` on one item list parses, then selects. It selected first and found nothing.
+- An extraction no longer edits the document. A node pipe rewrote the shared tree, so a stage reusing it through `page` read a page an earlier stage had rewritten: one host's chapter list went from 77 rows to none, and the toc was blamed.
 - `const` is interpolated, as section 3.4 has always said, so a field can be produced from `vars` alone.
 - Templates are validated at load time. An unknown placeholder, an unknown filter and a placeholder used outside its stage all passed `check` and were found by a crawl.
 
