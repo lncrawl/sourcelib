@@ -144,6 +144,9 @@ class TestBrowserSolver:
             sys.modules, "scraper.browsers", SimpleNamespace(pick_chromium=lambda: chromium)
         )
         monkeypatch.setitem(sys.modules, "scraper.cdp", SimpleNamespace(CdpSolver=solver_class))
+        # The transport too: `scraper.cdp` imports without it and only needs it once it drives a
+        # browser, so "this machine can run one" is not answered by the module alone.
+        monkeypatch.setitem(sys.modules, "websockets", SimpleNamespace())
 
     def test_a_machine_with_a_browser_gets_a_solver(self, monkeypatch):
         class Solver:
@@ -155,6 +158,31 @@ class TestBrowserSolver:
         assert isinstance(made, Solver)
         # Hidden first, a window only where one would be seen and only when it is needed.
         assert made.options == {"mode": "auto"}
+
+    def test_without_the_transport_it_is_absent(self, monkeypatch):
+        import builtins
+        import sys
+        from types import SimpleNamespace
+
+        monkeypatch.setitem(
+            sys.modules,
+            "scraper.browsers",
+            SimpleNamespace(pick_chromium=lambda: "/usr/bin/chromium"),
+        )
+        monkeypatch.setitem(sys.modules, "scraper.cdp", SimpleNamespace(CdpSolver=object))
+        monkeypatch.delitem(sys.modules, "websockets", raising=False)
+
+        real = builtins.__import__
+
+        def refuse(name, *args, **kwargs):
+            if name == "websockets":
+                raise ImportError(name)
+            return real(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", refuse)
+        # Built anyway, the solver would raise on its first call, and a caller reading that as
+        # "the host refused us" disables a site the browser never tried.
+        assert solver() is None
 
     def test_no_browser_installed_is_not_an_error(self, monkeypatch):
         self.install(monkeypatch, None, object)
