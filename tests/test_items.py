@@ -400,3 +400,54 @@ class TestRequire:
         )
         rows, _ = read_rows(spec, self.document(), required=("url",))
         assert len(rows) == 3
+
+
+class TestRowsInAScriptPayload:
+    """Section 3.8: a page that renders its list from a payload names the element holding it."""
+
+    PAGE = (
+        '<html><body><div id="app"></div>'
+        '<script id="__NEXT_DATA__" type="application/json">'
+        '{"props":{"pageProps":{"chapters":['
+        '{"name":"One","slug":"/c/1"},{"name":"Two","slug":"/c/2"}]}}}'
+        "</script></body></html>"
+    )
+
+    def spec(self, **extra):
+        return items(
+            script="script#__NEXT_DATA__",
+            json="props.pageProps.chapters",
+            fields={"title": {"json": "name"}, "url": {"json": "slug"}},
+            **extra,
+        )
+
+    def test_rows_come_out_of_the_payload(self):
+        document = Document.from_html(self.PAGE, url="https://e.test/n")
+        rows, _ = read_rows(self.spec(), document, required=("url",))
+        assert [r.get("title") for r in rows] == ["One", "Two"]
+        assert [r.get("url") for r in rows] == ["/c/1", "/c/2"]
+
+    def test_json_defaults_to_the_whole_payload(self):
+        page = '<html><body><script id="d">[{"name":"Only","slug":"/c/9"}]</script></body></html>'
+        document = Document.from_html(page, url="https://e.test/n")
+        rows, _ = read_rows(items(script="script#d", fields={"title": {"json": "name"}}), document)
+        assert [r.get("title") for r in rows] == ["Only"]
+
+    def test_text_that_is_not_json_yields_no_rows(self):
+        # Rather than raising, so a `from` alternative can lose to the next one.
+        page = '<html><body><script id="__NEXT_DATA__">not json at all</script></body></html>'
+        rows, _ = read_rows(self.spec(), Document.from_html(page, url="https://e.test/n"))
+        assert rows == []
+
+    def test_a_missing_element_yields_no_rows(self):
+        rows, _ = read_rows(
+            self.spec(), Document.from_html("<html><body></body></html>", url="https://e.test/n")
+        )
+        assert rows == []
+
+    def test_script_and_css_together_are_refused(self):
+        import pytest as _pytest
+        from pydantic import ValidationError
+
+        with _pytest.raises(ValidationError, match="script cannot be combined with css"):
+            items(script="script#d", css=".rows a", fields={"t": {}})

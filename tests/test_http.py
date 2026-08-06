@@ -147,10 +147,14 @@ class TestBrowserSolver:
 
     def test_a_machine_with_a_browser_gets_a_solver(self, monkeypatch):
         class Solver:
-            pass
+            def __init__(self, **options):
+                self.options = options
 
         self.install(monkeypatch, "/usr/bin/chromium", Solver)
-        assert isinstance(solver(), Solver)
+        made = solver()
+        assert isinstance(made, Solver)
+        # Hidden first, a window only where one would be seen and only when it is needed.
+        assert made.options == {"mode": "auto"}
 
     def test_no_browser_installed_is_not_an_error(self, monkeypatch):
         self.install(monkeypatch, None, object)

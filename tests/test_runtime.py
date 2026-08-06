@@ -265,6 +265,26 @@ class TestDownloadChapter:
         interpreter.download_chapter(novel, novel.chapters[0])
         assert ("GET", "https://e.test/read/1") in fetcher.calls
 
+    def test_an_address_read_off_a_page_is_not_a_template(self):
+        """A site's own braces are content, not a placeholder.
+
+        lnmtl renders its chapter table client-side and serves the unrendered
+        `{{ chapter.site_url }}` as the href. Passing that through the URL renderer failed the
+        crawl naming a placeholder nobody wrote.
+        """
+        listing = NOVEL_PAGE.replace('href="/c/1"', 'href="/c/{{ chapter.site_url }}"')
+        fetcher = RecordedFetcher(
+            {
+                "https://e.test/novel/x": listing,
+                "https://e.test/c/{{ chapter.site_url }}": CHAPTER,
+            }
+        )
+        interpreter = Interpreter(spec(), fetcher)
+        novel = interpreter.read_novel("https://e.test/novel/x")
+        chapter = interpreter.download_chapter(novel, novel.chapters[0])
+        assert ("GET", "https://e.test/c/{{ chapter.site_url }}") in fetcher.calls
+        assert "He walked" in (chapter.body or "")
+
 
 class TestFailureRules:
     """Section 4.4: uneven on purpose."""

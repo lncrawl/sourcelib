@@ -570,6 +570,7 @@ ItemList:
     request: Request | None = None
     css:     str | None = None
     json:    str | None = None
+    script:  str | None = None
     sort_by: str | None = None
     reverse: bool = False
     fields:  dict[str, Extractor] = {}
@@ -593,6 +594,33 @@ search:
   fields:
     title: { css: .novel-title }
 ```
+
+**`script` names an element whose text is JSON, and `json` walks inside it.** A page that renders its
+chapter list from a payload rather than into markup carries that payload in a script tag, and the rows
+are in it:
+
+```yaml
+toc:
+  items:
+    script: "script#__NEXT_DATA__" # the element whose text is JSON
+    json: "props.pageProps.novel.chapters" # the path to the rows inside it
+    fields:
+      title: { json: name }
+      url: { json: slug }
+```
+
+`script` MUST select exactly one element; where the selector matches several, the first in document
+order is used. Its text MUST be parsed as JSON, and a document where that fails yields no rows rather
+than raising, so a `from` alternative can lose to the next one. With `script` present, `json` is a path
+**into that payload** rather than into the response body, and defaults to `$`. `script` and `css` MUST
+NOT both be set: `css` already means "parse this markup and select inside it", which is the opposite
+direction, and a document setting both is refused at load time.
+
+This is the convention an `Extractor` already has, made available one level up. An extractor reading
+`css: script#__NEXT_DATA__` with a `json:` path resolves, because there `css` says where the JSON lives
+and `json` walks it. On an `ItemList` the same pair means parse-then-select, so the mechanism had
+nowhere to be spelled, which is why this is a third key rather than a re-reading of the two. Both
+existing meanings are unchanged.
 
 The parse is implied rather than written because there is nothing else `css` could mean against a
 string, and the alternative is every such source declaring the same single step. It is the same

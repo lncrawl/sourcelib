@@ -15,6 +15,7 @@ rather than links still produces one.
 
 from __future__ import annotations
 
+import json as jsonlib
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from bs4 import Tag
@@ -56,6 +57,8 @@ def _containers(item_list: ItemList, document: Document, parser: str = DEFAULT_P
     path names a string of markup and the selector runs inside what it becomes. Selecting first
     would answer nothing at all, since a JSON body has no node to select in.
     """
+    if item_list.script is not None:
+        return _rows_in_script(item_list, document)
     if item_list.json_ is not None:
         data = read_json_path(document.parsed, item_list.json_)
         if item_list.css is not None:
@@ -68,6 +71,31 @@ def _containers(item_list: ItemList, document: Document, parser: str = DEFAULT_P
             return []
         return list(document.node.select(item_list.css))
     return []
+
+
+def _rows_in_script(item_list: ItemList, document: Document) -> List[Any]:
+    """Rows out of the JSON an element carries (section 3.8).
+
+    A page that renders its list from a payload has no markup to select, and the pair `json` plus
+    `css` already means the opposite: parse markup, then select inside it. So the element is named
+    separately and `json` walks what it holds.
+
+    Unparseable text yields no rows rather than raising, which is what lets a `from` alternative
+    lose to the next one.
+    """
+    if document.node is None:
+        return []
+    element = document.node.select_one(item_list.script or "")
+    if element is None:
+        return []
+    try:
+        payload = jsonlib.loads(element.get_text())
+    except ValueError:
+        return []
+    data = read_json_path(payload, item_list.json_ or "$")
+    if isinstance(data, list):
+        return list(data)
+    return [data] if data is not None else []
 
 
 def _select_in_markup(data: Any, selector: str, parser: str) -> List[Any]:

@@ -375,7 +375,13 @@ class ItemList(Node):
     json_: Optional[str] = Field(
         default=None,
         alias="json",
-        description="A dotted path to an array of rows.",
+        description="A dotted path to an array of rows. With 'script', a path inside that "
+        "element's JSON rather than into the response body.",
+    )
+    script: Optional[str] = Field(
+        default=None,
+        description="A selector for an element whose text is JSON, for a page that renders its "
+        "rows from a payload rather than into markup. 'json' then walks inside it.",
     )
     sort_by: Optional[str] = Field(
         default=None,
@@ -398,6 +404,15 @@ class ItemList(Node):
         "already requires. A row where any of them resolves empty is dropped, so a filter "
         "step such as regex or reject in that field's pipe becomes a row-level condition.",
     )
+
+    @model_validator(mode="after")
+    def _check_container(self) -> "ItemList":
+        # `css` means "parse this markup and select inside it" and `script` means "read the JSON
+        # this element carries". They point in opposite directions, so a document naming both has
+        # not said which it wants (RFC-0001 section 3.8).
+        if self.script is not None and self.css is not None:
+            raise ValueError("script cannot be combined with css")
+        return self
 
 
 class SearchStage(ItemList):

@@ -44,13 +44,17 @@ def solver() -> Any:
     refusing to fetch.
     """
     try:
+        import websockets  # type: ignore[import-not-found]  # noqa: F401
         from scraper.browsers import pick_chromium  # type: ignore[import-not-found]
         from scraper.cdp import CdpSolver  # type: ignore[import-not-found]
     except ImportError:  # pragma: no cover - depends on the installed extras
         return None
     if pick_chromium() is None:  # pragma: no cover - depends on the machine
         return None
-    return CdpSolver()
+    # `auto` runs hidden first and shows a window only when that fails, and only where there is a
+    # display to show it on. A headless-only solver can never clear a challenge that wants a person,
+    # and a headed-only one spends their attention on the solves that never needed one.
+    return CdpSolver(mode="auto")
 
 
 class ScraperFetcher:

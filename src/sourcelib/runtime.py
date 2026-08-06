@@ -333,7 +333,7 @@ class Interpreter:
 
         stage = self.spec.novel
         request = stage.request if stage else None
-        document = self._run("novel", request or _get(url), default_url=url, novel_url=url)
+        document = self._run("novel", request or _no_request(), default_url=url, novel_url=url)
 
         novel.title = _text(self._field(stage, "title", document))
         if not novel.title:
@@ -433,7 +433,7 @@ class Interpreter:
             raise CrawlError("toc.items", "a novel needs a chapter list")
 
         chapter_list = stage.items
-        request = stage.request or _get(url)
+        request = stage.request or _no_request()
 
         def count_items(document: Document) -> int:
             return len(self._rows(chapter_list, document, ("url",))[0])
@@ -539,7 +539,7 @@ class Interpreter:
         The hook returns rows as mappings. Volume grouping still applies, so a hook-driven list
         can carry its own `volume` on each row or fall back to `chapters_per_volume`.
         """
-        request = (stage.request if stage else None) or _get(url)
+        request = (stage.request if stage else None) or _no_request()
         document = self._run("toc", request, default_url=url, novel_url=url)
         function, ctx = self._hook("toc.items")
         produced = function([], document, ctx) if function else []
@@ -588,7 +588,7 @@ class Interpreter:
             raise CrawlError("chapter.body", "a chapter needs a body")
 
         url = self._chapter_url(stage, chapter, novel)
-        request = stage.request or _get(url)
+        request = stage.request or _no_request()
         context = self.context(novel_url=novel.url, chapter=chapter.context())
 
         # A `chapter.request` hook replaces the fetch, exactly as it does for the other three
@@ -686,10 +686,17 @@ class Interpreter:
 # -- helpers -------------------------------------------------------------------------- #
 
 
-def _get(url: str):
+def _no_request():
+    """A stage's default request: no address, so the caller's `default_url` is used verbatim.
+
+    Not `{"get": url}`. Every caller already passes the address as `default_url`, and putting it
+    in `get` sends it through the URL template renderer a second time, so a site whose markup
+    contains braces has its own text read as a placeholder. lnmtl serves an unrendered Vue
+    template as an href and the crawl failed on `{chapter.site_url} has no value`.
+    """
     from sourcelib.spec.model import Request
 
-    return Request.model_validate({"get": url})
+    return Request.model_validate({})
 
 
 def _origin_of(spec: SourceSpec) -> str:

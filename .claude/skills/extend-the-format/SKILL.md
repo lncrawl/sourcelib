@@ -29,6 +29,24 @@ zero, which `paginate.first` covers; 7 paged by an offset that advances by what 
 start-and-end range over a known total, which is a third mechanism and stayed a hook at one host. One
 vague count would have argued for one vague feature.
 
+### A count taken from the wrong place
+
+`ItemList.script` was added on 2026-08-06 to read rows out of the JSON an element carries, and the
+gap it fills is real: an `Extractor` reading `css: script#__NEXT_DATA__` with a `json:` path resolves,
+while the same pair on a list means parse-then-select, so a list had no way to say it.
+
+The **evidence offered for it was not**. Nine hosts were counted by grepping their crawlers for
+`json.loads`, and that measures "this crawler parses JSON somewhere", not "this page carries its rows
+in a script tag". Checked afterwards against the pages themselves: `teanovel` holds only its latest
+chapter in `__NEXT_DATA__` and fetches the list from an API; `renovels`, `novelarrow`, `wuxia.click`
+and `ranobe-novels` carry no chapter array in any script at all. The real count for this shape is
+somewhere near zero, and what those hosts actually want is a way to describe an **API endpoint**,
+which is a request rather than a container.
+
+The lesson is the rule's own: count the shape, not the symptom, and count it where the shape lives —
+on the site. A grep over the crawlers measures how someone once solved a problem, which is a
+different fact from what the site serves.
+
 Three rules hold the line and none is negotiable for convenience:
 
 - **No control flow.** No conditionals, no user loops, no expressions, no arithmetic. `paginate` is the

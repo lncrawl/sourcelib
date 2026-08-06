@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-08-06
+
+### Added
+
+- The browser solver runs in `auto` mode: hidden first, a window only when that fails and only where a display exists, so a challenge that wants a person can be cleared by one.
+- `ItemList.script`, naming an element whose JSON carries the rows, for a page that renders its list from a payload rather than into markup. RFC-0001 section 3.8.
+
+### Fixed
+
+- A stage's default request no longer renders the address it was given. A URL read off a page went through the template renderer a second time, so a site whose markup contains braces had its own text read as a placeholder and the crawl failed naming a placeholder the spec never wrote.
+- A solver is configured only when its transport is installed too. Without it the solver was built and raised on first use, so a host the browser never reached looked like a host that refused.
+
 ## [0.1.6] - 2026-08-05
 
 ### Added
@@ -110,6 +122,7 @@ First release. Implements [RFC-0001](docs/0001-source-definition.md) at `spec: 1
 - IDNA2008 is required, not the standard library's codec.
 - Fetching is an extra. A base install validates, resolves and transforms with no HTTP stack.
 
+[0.1.7]: https://github.com/lncrawl/sourcelib/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/lncrawl/sourcelib/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/lncrawl/sourcelib/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/lncrawl/sourcelib/compare/v0.1.3...v0.1.4
